@@ -12,4 +12,7 @@
 
 # python cache and egg-info directories
 __pycache__/
-runtime\src\terraclaw_runtime.egg-info
+/runtime/src/terraclaw_runtime.egg-info
+
+# sensitive config files
+/runtime/config/config.yaml

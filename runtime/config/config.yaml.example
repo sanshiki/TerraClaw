@@ -12,6 +12,7 @@ bridge:
 llm:
   provider: "openai"
   model: "deepseek-v4-flash"
+  api_key:"123456789abcdef"  # <-- REPLACE WITH YOUR API KEY
   api_base: "https://api.deepseek.com"
   max_tokens: 4096
   temperature: 0.3
