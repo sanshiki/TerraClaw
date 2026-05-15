@@ -1,0 +1,60 @@
+# TerraClaw Runtime Configuration
+# Copy to config.yaml and fill in your values.
+
+bridge:
+  url: "ws://127.0.0.1:9777/bridge"
+  shared_secret: "terraclaw-dev"
+  reconnect_max_delay_s: 30.0
+  reconnect_base_delay_s: 1.0
+  heartbeat_interval_s: 2.0
+  message_timeout_s: 10.0
+
+llm:
+  provider: "openai"
+  model: "deepseek-v4-flash"
+  api_base: "https://api.deepseek.com"
+  max_tokens: 4096
+  temperature: 0.3
+  max_context_tokens: 8000
+
+memory:
+  db_path: "data/memory.db"
+  vector_store_path: "data/vectors"
+  working_memory_max_items: 100
+  spatial_grid_resolution: 1
+
+skill:
+  default_timeout_s: 120.0
+  max_concurrent_skills: 1
+  skill_definitions_path: "config/skills"
+
+recovery:
+  stuck_movement_threshold_px: 30.0
+  stuck_time_window_s: 10.0
+  loop_max_repeats: 5
+  loop_time_window_s: 30.0
+  health_ratio_threshold: 0.3
+  enemy_proximity_threshold_px: 200.0
+  breath_threshold: 50
+  default_action_timeout_s: 30.0
+  default_skill_timeout_s: 120.0
+
+sandbox:
+  enabled: false
+  docker_image: "terraclaw-sandbox:latest"
+  max_runtime_s: 30.0
+  max_output_chars: 10000
+  max_memory_mb: 256
+  network_enabled: false
+
+replay:
+  enabled: true
+  db_path: "data/replays"
+  record_all_messages: true
+  compression_enabled: true
+
+# Runtime settings
+tick_rate_hz: 10.0
+llm_call_interval_s: 5.0
+log_level: "INFO"
+verbose: true   # Set true for detailed debug output

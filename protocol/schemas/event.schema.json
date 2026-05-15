@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://terraclaw.dev/schemas/event.json",
+  "title": "Event Messages",
+  "description": "Asynchronous events streamed from game to runtime.",
+
+  "observation_event": {
+    "type": "object",
+    "required": ["event_type", "tick", "timestamp_ms", "data"],
+    "properties": {
+      "event_type": {
+        "type": "string",
+        "description": "Dot-separated event type identifier."
+      },
+      "tick": {
+        "type": "integer",
+        "description": "Game tick when the event occurred."
+      },
+      "timestamp_ms": {
+        "type": "integer",
+        "description": "Wall-clock timestamp in milliseconds."
+      },
+      "importance": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 10,
+        "default": 5,
+        "description": "Subjective importance rating for filtering/prioritization."
+      },
+      "position": {
+        "type": "object",
+        "properties": {
+          "x": {"type": "number"},
+          "y": {"type": "number"}
+        },
+        "description": "World position where the event occurred."
+      },
+      "data": {
+        "type": "object",
+        "description": "Event-type-specific payload."
+      }
+    }
+  },
+
+  "event_subscribe": {
+    "type": "object",
+    "required": ["event_types"],
+    "properties": {
+      "event_types": {
+        "type": "array",
+        "items": {"type": "string"},
+        "minItems": 1,
+        "description": "Event types to subscribe to. Supports glob patterns (e.g. 'player.*', 'entity.*')."
+      },
+      "filter": {
+        "type": "object",
+        "properties": {
+          "min_importance": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10,
+            "description": "Only send events at or above this importance."
+          },
+          "throttle_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Minimum interval between events of the same type."
+          },
+          "max_distance": {
+            "type": "number",
+            "description": "Only send events within this pixel distance of the player."
+          },
+          "npc_types": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "If filtering entities, only these categories."
+          }
+        }
+      }
+    }
+  },
+
+  "event_unsubscribe": {
+    "type": "object",
+    "required": ["event_types"],
+    "properties": {
+      "event_types": {
+        "type": "array",
+        "items": {"type": "string"}
+      }
+    }
+  },
+
+  "event_catalog": {
+    "description": "Catalog of all known event types for reference.",
+    "player": [
+      "player.damage",
+      "player.heal",
+      "player.death",
+      "player.respawn",
+      "player.buff_added",
+      "player.buff_expired",
+      "player.item_pickup",
+      "player.inventory_full",
+      "player.breath_low",
+      "player.entering_water",
+      "player.exiting_water",
+      "player.teleported"
+    ],
+    "world": [
+      "world.time_change",
+      "world.weather_change",
+      "world.biome_change",
+      "world.boss_spawn",
+      "world.boss_defeated",
+      "world.invasion_start",
+      "world.invasion_end",
+      "world.blood_moon_start",
+      "world.blood_moon_end",
+      "world.eclipse_start",
+      "world.eclipse_end",
+      "world.npc_arrived",
+      "world.npc_departed"
+    ],
+    "entity": [
+      "entity.npc_spawn",
+      "entity.npc_death",
+      "entity.npc_transformed",
+      "entity.item_drop",
+      "entity.projectile_created",
+      "entity.projectile_destroyed"
+    ],
+    "tile": [
+      "tile.breaking",
+      "tile.broken",
+      "tile.placed",
+      "tile.liquid_change",
+      "tile.explosion"
+    ],
+    "ui": [
+      "ui.opened",
+      "ui.closed",
+      "ui.craft_available",
+      "ui.shop_changed",
+      "ui.dialogue_advanced"
+    ],
+    "system": [
+      "system.connection_lost",
+      "system.connection_restored",
+      "system.action_cancelled",
+      "system.action_queued",
+      "system.error",
+      "system.warning"
+    ]
+  }
+}

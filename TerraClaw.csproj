@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>TerraClaw</RootNamespace>
+    <AssemblyName>TerraClaw</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="runtime\**" />
+    <Compile Remove="protocol\**" />
+    <Compile Remove="docker\**" />
+    <Compile Remove="tools\**" />
+    <Compile Remove="config\**" />
+  </ItemGroup>
+
+  <Import Project="..\tModLoader.targets" />
+</Project>

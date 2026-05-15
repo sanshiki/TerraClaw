@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://terraclaw.dev/schemas/handshake.json",
+  "title": "Handshake Messages",
+  "description": "Initial handshake for authentication and version negotiation.",
+
+  "handshake_request": {
+    "type": "object",
+    "required": ["version", "auth"],
+    "properties": {
+      "version": {
+        "type": "string",
+        "pattern": "^\\d+\\.\\d+$",
+        "description": "Protocol version semver (e.g. '1.0')."
+      },
+      "auth": {
+        "type": "string",
+        "description": "Shared secret for authentication."
+      },
+      "client_name": {
+        "type": "string",
+        "description": "Human-readable client identifier for logging."
+      },
+      "capabilities": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Optional feature flags the client supports."
+      }
+    }
+  },
+
+  "handshake_ok": {
+    "type": "object",
+    "required": ["session_id", "server_version"],
+    "properties": {
+      "session_id": {
+        "type": "string",
+        "format": "uuid",
+        "description": "Assigned session identifier."
+      },
+      "server_version": {
+        "type": "string",
+        "description": "Server protocol version."
+      },
+      "server_capabilities": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Feature flags the server supports."
+      },
+      "game_info": {
+        "type": "object",
+        "properties": {
+          "world_name": {"type": "string"},
+          "world_size": {
+            "type": "object",
+            "properties": {
+              "width": {"type": "integer"},
+              "height": {"type": "integer"}
+            }
+          },
+          "hardmode": {"type": "boolean"},
+          "player_name": {"type": "string"}
+        }
+      }
+    }
+  },
+
+  "handshake_error": {
+    "type": "object",
+    "required": ["reason"],
+    "properties": {
+      "reason": {
+        "type": "string",
+        "enum": ["AUTH_FAILED", "VERSION_MISMATCH", "SERVER_BUSY", "ALREADY_CONNECTED"]
+      },
+      "message": {
+        "type": "string"
+      }
+    }
+  }
+}

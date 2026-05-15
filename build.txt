@@ -1,0 +1,3 @@
+displayName = TerraClaw
+author = Sanshiki
+version = 0.1

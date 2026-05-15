@@ -1,0 +1,21 @@
+Mods: {
+	TerraClaw: {
+		NPCName.TerraClawAgentNPC: TerraClaw Agent
+		ItemName.AgentSpawner: Agent Spawner
+		ItemTooltip.AgentSpawner: Debug item — spawns an AI agent at the cursor
+	}
+}
+
+NPCs.TerraClawAgentNPC.DisplayName: Terra Claw Agent N P C
+
+Items: {
+	AgentSpawner: {
+		Tooltip: ""
+		DisplayName: Agent Spawner
+	}
+
+	BridgeAgentSpawner: {
+		DisplayName: Bridge Agent Spawner
+		Tooltip: ""
+	}
+}

@@ -1,0 +1,272 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://terraclaw.dev/schemas/action.json",
+  "title": "Action Messages",
+  "description": "Action execution messages sent from runtime to game.",
+
+  "action_execute": {
+    "type": "object",
+    "required": ["action_id", "action_type", "params"],
+    "properties": {
+      "action_id": {
+        "type": "string",
+        "format": "uuid",
+        "description": "Unique action identifier for tracking and cancellation."
+      },
+      "action_type": {
+        "type": "string",
+        "enum": [
+          "move", "jump", "mine_tile", "place_tile", "use_item",
+          "interact", "select_item", "inventory_operation", "craft",
+          "navigate_to", "wait", "use_consumable", "combat",
+          "manage_inventory", "query"
+        ]
+      },
+      "params": {
+        "type": "object",
+        "description": "Action-type-specific parameters."
+      },
+      "priority": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 3,
+        "default": 1,
+        "description": "0=CRITICAL, 1=HIGH, 2=NORMAL, 3=LOW."
+      },
+      "cancel_on": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["damage", "obstacle", "enemy_nearby", "liquid_enter", "death", "ui_open"]
+        }
+      },
+      "timeout_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 300000,
+        "default": 30000,
+        "description": "Maximum duration before action is considered failed."
+      },
+      "interruptible": {
+        "type": "boolean",
+        "default": true,
+        "description": "Whether higher-priority actions can interrupt this one."
+      }
+    }
+  },
+
+  "action_cancel": {
+    "type": "object",
+    "required": ["action_id"],
+    "properties": {
+      "action_id": {
+        "type": "string",
+        "format": "uuid"
+      }
+    }
+  },
+
+  "action_queue": {
+    "type": "object",
+    "required": ["actions"],
+    "properties": {
+      "actions": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 20,
+        "items": {"$ref": "#/action_execute"}
+      }
+    }
+  },
+
+  "action_result": {
+    "type": "object",
+    "required": ["action_id", "status"],
+    "properties": {
+      "action_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "status": {
+        "type": "string",
+        "enum": ["completed", "failed", "cancelled", "timeout", "rejected"]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "success": {"type": "boolean"},
+          "output": {"type": "object"},
+          "position_after": {
+            "type": "object",
+            "properties": {
+              "x": {"type": "number"},
+              "y": {"type": "number"}
+            }
+          },
+          "items_collected": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "tiles_affected": {
+            "type": "integer"
+          }
+        }
+      },
+      "error": {
+        "type": "object",
+        "properties": {
+          "code": {"type": "string"},
+          "message": {"type": "string"},
+          "details": {"type": "object"}
+        }
+      },
+      "tick_completed": {"type": "integer"},
+      "duration_ms": {"type": "integer"}
+    }
+  },
+
+  "action_progress": {
+    "type": "object",
+    "required": ["action_id", "progress_pct", "status"],
+    "properties": {
+      "action_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "progress_pct": {
+        "type": "number",
+        "minimum": 0.0,
+        "maximum": 1.0
+      },
+      "status": {
+        "type": "string",
+        "description": "Human-readable status of the action."
+      }
+    }
+  },
+
+  "action_type_schemas": {
+    "move": {
+      "required": ["direction"],
+      "properties": {
+        "direction": {"type": "string", "enum": ["left", "right"]},
+        "duration_ms": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "speed_multiplier": {"type": "number", "minimum": 0.1, "maximum": 2.0},
+        "jump_if_blocked": {"type": "boolean"},
+        "auto_jump": {"type": "boolean"}
+      }
+    },
+    "jump": {
+      "properties": {
+        "duration_ms": {"type": "integer", "minimum": 0, "maximum": 5000},
+        "move_during": {"type": "string", "enum": ["left", "right", "none"]}
+      }
+    },
+    "mine_tile": {
+      "required": ["target_x", "target_y"],
+      "properties": {
+        "target_x": {"type": "integer"},
+        "target_y": {"type": "integer"},
+        "tool_slot": {"type": "integer", "minimum": 0, "maximum": 9},
+        "max_duration_ms": {"type": "integer"}
+      }
+    },
+    "place_tile": {
+      "required": ["target_x", "target_y", "item_slot"],
+      "properties": {
+        "target_x": {"type": "integer"},
+        "target_y": {"type": "integer"},
+        "item_slot": {"type": "integer"},
+        "wall": {"type": "boolean"}
+      }
+    },
+    "use_item": {
+      "required": ["slot"],
+      "properties": {
+        "slot": {"type": "integer", "minimum": 0, "maximum": 9},
+        "aim_x": {"type": "number"},
+        "aim_y": {"type": "number"},
+        "duration_ms": {"type": "integer"}
+      }
+    },
+    "interact": {
+      "required": ["target_x", "target_y"],
+      "properties": {
+        "target_x": {"type": "integer"},
+        "target_y": {"type": "integer"},
+        "interaction_type": {
+          "type": "string",
+          "enum": ["talk", "open_chest", "use_lever", "open_door", "auto"]
+        }
+      }
+    },
+    "select_item": {
+      "required": ["slot"],
+      "properties": {
+        "slot": {"type": "integer", "minimum": 0, "maximum": 9}
+      }
+    },
+    "inventory_operation": {
+      "required": ["operation"],
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": ["move", "drop", "use", "equip", "stack_split", "quick_stack"]
+        },
+        "from_slot": {"type": "integer"},
+        "to_slot": {"type": "integer"},
+        "quantity": {"type": "integer"}
+      }
+    },
+    "craft": {
+      "required": ["item_type"],
+      "properties": {
+        "item_type": {"type": "string"},
+        "quantity": {"type": "integer", "minimum": 1},
+        "station": {"type": "string"}
+      }
+    },
+    "navigate_to": {
+      "required": ["target_x", "target_y"],
+      "properties": {
+        "target_x": {"type": "integer"},
+        "target_y": {"type": "integer"},
+        "max_duration_ms": {"type": "integer"},
+        "allow_mining": {"type": "boolean"},
+        "allow_placing": {"type": "boolean"}
+      }
+    },
+    "wait": {
+      "properties": {
+        "duration_ms": {"type": "integer", "minimum": 0, "maximum": 30000}
+      }
+    },
+    "use_consumable": {
+      "properties": {
+        "item_type": {"type": "string"},
+        "from_slot": {"type": "integer"}
+      }
+    },
+    "combat": {
+      "properties": {
+        "target_npc_id": {"type": "integer"},
+        "target_type": {"type": "string"},
+        "style": {
+          "type": "string",
+          "enum": ["melee", "ranged", "magic", "summon", "flee"]
+        },
+        "max_duration_ms": {"type": "integer"}
+      }
+    },
+    "query": {
+      "required": ["query_type", "params"],
+      "properties": {
+        "query_type": {
+          "type": "string",
+          "enum": ["tile_at", "entity_info", "distance", "path_check", "recipe_check", "inventory_search"]
+        },
+        "params": {"type": "object"}
+      }
+    }
+  }
+}

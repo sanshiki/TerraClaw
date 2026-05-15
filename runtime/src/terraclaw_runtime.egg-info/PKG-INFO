@@ -1,0 +1,23 @@
+Metadata-Version: 2.4
+Name: terraclaw-runtime
+Version: 0.1.0
+Summary: Embodied AI runtime for Terraria — LLM agent bridge
+Author: Sanshiki
+License: MIT
+Requires-Python: >=3.12
+Requires-Dist: websockets>=13.0
+Requires-Dist: anthropic>=0.39.0
+Requires-Dist: openai>=1.60.0
+Requires-Dist: structlog>=24.4.0
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: jsonschema>=4.23.0
+Requires-Dist: chromadb>=0.5.0
+Requires-Dist: pydantic>=2.9.0
+Requires-Dist: httpx>=0.28.0
+Requires-Dist: aiofiles>=24.1.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.3.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.24.0; extra == "dev"
+Requires-Dist: pytest-cov>=6.0.0; extra == "dev"
+Requires-Dist: ruff>=0.8.0; extra == "dev"
+Requires-Dist: mypy>=1.13.0; extra == "dev"

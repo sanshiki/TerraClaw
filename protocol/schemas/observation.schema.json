@@ -1,0 +1,369 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://terraclaw.dev/schemas/observation.json",
+  "title": "Observation Messages",
+  "description": "Game state observations sent from game to runtime.",
+
+  "observation_state": {
+    "type": "object",
+    "required": ["sequence", "tick", "timestamp_ms", "player"],
+    "properties": {
+      "sequence": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Monotonically increasing observation sequence number."
+      },
+      "tick": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Game tick when this observation was captured."
+      },
+      "timestamp_ms": {
+        "type": "integer",
+        "description": "Wall-clock timestamp in milliseconds."
+      },
+      "player": {
+        "type": "object",
+        "required": ["position", "velocity", "health", "mana"],
+        "properties": {
+          "position": {
+            "type": "object",
+            "required": ["x", "y"],
+            "properties": {
+              "x": {"type": "number"},
+              "y": {"type": "number"}
+            }
+          },
+          "velocity": {
+            "type": "object",
+            "required": ["x", "y"],
+            "properties": {
+              "x": {"type": "number"},
+              "y": {"type": "number"}
+            }
+          },
+          "health": {
+            "type": "object",
+            "required": ["current", "max"],
+            "properties": {
+              "current": {"type": "integer", "minimum": 0},
+              "max": {"type": "integer", "minimum": 1}
+            }
+          },
+          "mana": {
+            "type": "object",
+            "required": ["current", "max"],
+            "properties": {
+              "current": {"type": "integer", "minimum": 0},
+              "max": {"type": "integer", "minimum": 0}
+            }
+          },
+          "breath": {
+            "type": "object",
+            "properties": {
+              "current": {"type": "integer"},
+              "max": {"type": "integer"}
+            }
+          },
+          "direction": {
+            "type": "string",
+            "enum": ["left", "right"]
+          },
+          "is_grounded": {"type": "boolean"},
+          "is_in_liquid": {"type": "boolean"},
+          "liquid_type": {
+            "type": "string",
+            "enum": ["none", "water", "lava", "honey"]
+          },
+          "active_buffs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "remaining_seconds"],
+              "properties": {
+                "id": {"type": "string"},
+                "remaining_seconds": {"type": "integer"}
+              }
+            }
+          },
+          "mount": {
+            "type": ["string", "null"],
+            "description": "Active mount type ID, or null."
+          },
+          "grappling": {"type": "boolean"},
+          "selected_hotbar_slot": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9
+          }
+        }
+      },
+      "world": {
+        "type": "object",
+        "properties": {
+          "time": {
+            "type": "object",
+            "properties": {
+              "hour": {"type": "number"},
+              "minute": {"type": "number"},
+              "is_day": {"type": "boolean"}
+            }
+          },
+          "weather": {
+            "type": "string",
+            "enum": ["clear", "rain", "storm", "blizzard", "sandstorm", "slime_rain"]
+          },
+          "biome": {"type": "string"},
+          "nearby_biomes": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "active_events": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "bosses_alive": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "invasion": {
+            "type": ["string", "null"]
+          },
+          "hardmode": {"type": "boolean"},
+          "evil_type": {
+            "type": "string",
+            "enum": ["corruption", "crimson", "none"]
+          }
+        }
+      },
+      "spatial_window": {
+        "type": "object",
+        "properties": {
+          "center": {
+            "type": "object",
+            "required": ["x", "y"],
+            "properties": {
+              "x": {"type": "integer"},
+              "y": {"type": "integer"}
+            }
+          },
+          "radius": {"type": "integer", "minimum": 5, "maximum": 100},
+          "tiles": {
+            "type": "object",
+            "properties": {
+              "solids": {
+                "type": "string",
+                "description": "Base64-encoded run-length-encoded solid tile data."
+              },
+              "walls": {
+                "type": "string",
+                "description": "Base64-encoded RLE wall data."
+              },
+              "liquids": {
+                "type": "string",
+                "description": "Base64-encoded RLE liquid data."
+              },
+              "interesting": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["pos", "type"],
+                  "properties": {
+                    "pos": {
+                      "type": "object",
+                      "required": ["x", "y"],
+                      "properties": {
+                        "x": {"type": "integer"},
+                        "y": {"type": "integer"}
+                      }
+                    },
+                    "type": {"type": "string"},
+                    "quantity": {"type": "integer"},
+                    "id": {"type": "integer"},
+                    "label": {"type": "string"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "entities": {
+        "type": "object",
+        "properties": {
+          "npcs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "type", "position"],
+              "properties": {
+                "id": {"type": "integer"},
+                "type": {"type": "string"},
+                "position": {
+                  "type": "object",
+                  "required": ["x", "y"],
+                  "properties": {
+                    "x": {"type": "number"},
+                    "y": {"type": "number"}
+                  }
+                },
+                "health": {
+                  "type": "object",
+                  "properties": {
+                    "current": {"type": "integer"},
+                    "max": {"type": "integer"}
+                  }
+                },
+                "is_hostile": {"type": "boolean"},
+                "is_boss": {"type": "boolean"},
+                "ai_state": {"type": "string"},
+                "distance_to_player": {"type": "number"}
+              }
+            }
+          },
+          "items_on_ground": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "type", "position"],
+              "properties": {
+                "id": {"type": "integer"},
+                "type": {"type": "string"},
+                "stack": {"type": "integer"},
+                "position": {
+                  "type": "object",
+                  "required": ["x", "y"],
+                  "properties": {
+                    "x": {"type": "number"},
+                    "y": {"type": "number"}
+                  }
+                },
+                "distance_to_player": {"type": "number"}
+              }
+            }
+          },
+          "projectiles": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["type", "position", "velocity"],
+              "properties": {
+                "type": {"type": "string"},
+                "position": {
+                  "type": "object",
+                  "required": ["x", "y"],
+                  "properties": {
+                    "x": {"type": "number"},
+                    "y": {"type": "number"}
+                  }
+                },
+                "velocity": {
+                  "type": "object",
+                  "required": ["x", "y"],
+                  "properties": {
+                    "x": {"type": "number"},
+                    "y": {"type": "number"}
+                  }
+                },
+                "is_hostile": {"type": "boolean"},
+                "damage": {"type": "integer"}
+              }
+            }
+          },
+          "players": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": {"type": "integer"},
+                "name": {"type": "string"},
+                "position": {
+                  "type": "object",
+                  "required": ["x", "y"],
+                  "properties": {
+                    "x": {"type": "number"},
+                    "y": {"type": "number"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "inventory": {
+        "type": "object",
+        "properties": {
+          "hotbar": {
+            "type": "array",
+            "minItems": 10,
+            "maxItems": 10,
+            "items": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "required": ["slot", "type", "stack"],
+                  "properties": {
+                    "slot": {"type": "integer", "minimum": 0, "maximum": 9},
+                    "type": {"type": "string"},
+                    "stack": {"type": "integer", "minimum": 1},
+                    "prefix": {"type": "string"}
+                  }
+                },
+                {"type": "null"}
+              ]
+            }
+          },
+          "summary": {
+            "type": "object",
+            "properties": {
+              "total_slots_used": {"type": "integer"},
+              "total_slots": {"type": "integer"},
+              "coins": {
+                "type": "object",
+                "properties": {
+                  "platinum": {"type": "integer"},
+                  "gold": {"type": "integer"},
+                  "silver": {"type": "integer"},
+                  "copper": {"type": "integer"}
+                }
+              },
+              "key_items": {
+                "type": "array",
+                "items": {"type": "string"}
+              },
+              "ammo": {
+                "type": "object",
+                "properties": {
+                  "type": {"type": "string"},
+                  "count": {"type": "integer"}
+                }
+              }
+            }
+          }
+        }
+      },
+      "ui_state": {
+        "type": "object",
+        "properties": {
+          "active_ui": {
+            "type": "string",
+            "enum": ["none", "inventory", "chest", "crafting", "shop", "dialogue", "bank", "trade"]
+          },
+          "interaction_target": {
+            "type": ["string", "null"]
+          },
+          "open_recipes": {
+            "type": "array",
+            "items": {"type": "string"}
+          }
+        }
+      }
+    }
+  },
+
+  "observation_mode": {
+    "type": "string",
+    "enum": ["minimal", "normal", "detailed", "diagnostic"],
+    "description": "Observation detail level. minimal=player only, normal=+entities+world, detailed=+spatial_window, diagnostic=everything."
+  }
+}

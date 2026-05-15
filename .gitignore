@@ -1,0 +1,15 @@
+/obj/
+/trash/
+/Scripts/__pycache__/
+/.cursor/
+/.roo/
+/.claude/
+/bin/
+/docker/
+/TerraClaw.csproj.Iscache
+/TerraClaw.sln
+
+
+# python cache and egg-info directories
+__pycache__/
+runtime\src\terraclaw_runtime.egg-info
