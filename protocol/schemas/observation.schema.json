@@ -4,9 +4,9 @@
   "title": "Observation Messages",
   "description": "Game state observations sent from game to runtime.",
 
-  "observation_state": {
+  "agent_observation_state": {
     "type": "object",
-    "required": ["sequence", "tick", "timestamp_ms", "player"],
+    "required": ["sequence", "tick", "timestamp_ms", "agent"],
     "properties": {
       "sequence": {
         "type": "integer",
@@ -22,9 +22,9 @@
         "type": "integer",
         "description": "Wall-clock timestamp in milliseconds."
       },
-      "player": {
+      "agent": {
         "type": "object",
-        "required": ["position", "velocity", "health", "mana"],
+        "required": ["position", "velocity"],
         "properties": {
           "position": {
             "type": "object",
@@ -42,59 +42,16 @@
               "y": {"type": "number"}
             }
           },
-          "health": {
-            "type": "object",
-            "required": ["current", "max"],
-            "properties": {
-              "current": {"type": "integer", "minimum": 0},
-              "max": {"type": "integer", "minimum": 1}
-            }
-          },
-          "mana": {
-            "type": "object",
-            "required": ["current", "max"],
-            "properties": {
-              "current": {"type": "integer", "minimum": 0},
-              "max": {"type": "integer", "minimum": 0}
-            }
-          },
-          "breath": {
+          "tile_position": {
             "type": "object",
             "properties": {
-              "current": {"type": "integer"},
-              "max": {"type": "integer"}
+              "x": {"type": "integer"},
+              "y": {"type": "integer"}
             }
           },
           "direction": {
             "type": "string",
             "enum": ["left", "right"]
-          },
-          "is_grounded": {"type": "boolean"},
-          "is_in_liquid": {"type": "boolean"},
-          "liquid_type": {
-            "type": "string",
-            "enum": ["none", "water", "lava", "honey"]
-          },
-          "active_buffs": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": ["id", "remaining_seconds"],
-              "properties": {
-                "id": {"type": "string"},
-                "remaining_seconds": {"type": "integer"}
-              }
-            }
-          },
-          "mount": {
-            "type": ["string", "null"],
-            "description": "Active mount type ID, or null."
-          },
-          "grappling": {"type": "boolean"},
-          "selected_hotbar_slot": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9
           }
         }
       },
@@ -114,9 +71,9 @@
             "enum": ["clear", "rain", "storm", "blizzard", "sandstorm", "slime_rain"]
           },
           "biome": {"type": "string"},
-          "nearby_biomes": {
-            "type": "array",
-            "items": {"type": "string"}
+          "depth_layer": {
+            "type": "string",
+            "enum": ["sky", "surface", "underground", "cavern", "underworld"]
           },
           "active_events": {
             "type": "array",
@@ -129,11 +86,7 @@
           "invasion": {
             "type": ["string", "null"]
           },
-          "hardmode": {"type": "boolean"},
-          "evil_type": {
-            "type": "string",
-            "enum": ["corruption", "crimson", "none"]
-          }
+          "hardmode": {"type": "boolean"}
         }
       },
       "spatial_window": {
@@ -217,7 +170,7 @@
                 "is_hostile": {"type": "boolean"},
                 "is_boss": {"type": "boolean"},
                 "ai_state": {"type": "string"},
-                "distance_to_player": {"type": "number"}
+                "distance_to_center": {"type": "number"}
               }
             }
           },
@@ -238,7 +191,7 @@
                     "y": {"type": "number"}
                   }
                 },
-                "distance_to_player": {"type": "number"}
+                "distance_to_center": {"type": "number"}
               }
             }
           },
@@ -269,101 +222,9 @@
                 "damage": {"type": "integer"}
               }
             }
-          },
-          "players": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "index": {"type": "integer"},
-                "name": {"type": "string"},
-                "position": {
-                  "type": "object",
-                  "required": ["x", "y"],
-                  "properties": {
-                    "x": {"type": "number"},
-                    "y": {"type": "number"}
-                  }
-                }
-              }
-            }
-          }
-        }
-      },
-      "inventory": {
-        "type": "object",
-        "properties": {
-          "hotbar": {
-            "type": "array",
-            "minItems": 10,
-            "maxItems": 10,
-            "items": {
-              "anyOf": [
-                {
-                  "type": "object",
-                  "required": ["slot", "type", "stack"],
-                  "properties": {
-                    "slot": {"type": "integer", "minimum": 0, "maximum": 9},
-                    "type": {"type": "string"},
-                    "stack": {"type": "integer", "minimum": 1},
-                    "prefix": {"type": "string"}
-                  }
-                },
-                {"type": "null"}
-              ]
-            }
-          },
-          "summary": {
-            "type": "object",
-            "properties": {
-              "total_slots_used": {"type": "integer"},
-              "total_slots": {"type": "integer"},
-              "coins": {
-                "type": "object",
-                "properties": {
-                  "platinum": {"type": "integer"},
-                  "gold": {"type": "integer"},
-                  "silver": {"type": "integer"},
-                  "copper": {"type": "integer"}
-                }
-              },
-              "key_items": {
-                "type": "array",
-                "items": {"type": "string"}
-              },
-              "ammo": {
-                "type": "object",
-                "properties": {
-                  "type": {"type": "string"},
-                  "count": {"type": "integer"}
-                }
-              }
-            }
-          }
-        }
-      },
-      "ui_state": {
-        "type": "object",
-        "properties": {
-          "active_ui": {
-            "type": "string",
-            "enum": ["none", "inventory", "chest", "crafting", "shop", "dialogue", "bank", "trade"]
-          },
-          "interaction_target": {
-            "type": ["string", "null"]
-          },
-          "open_recipes": {
-            "type": "array",
-            "items": {"type": "string"}
           }
         }
       }
     }
-  },
-
-  "observation_mode": {
-    "type": "string",
-    "enum": ["minimal", "normal", "detailed", "diagnostic"],
-    "description": "Observation detail level. minimal=player only, normal=+entities+world, detailed=+spatial_window, diagnostic=everything."
   }
 }

@@ -30,12 +30,13 @@ class AgentLoop:
         agent_id: str,
         llm_call_interval_s: float = 5.0,
         tick_rate_hz: float = 10.0,
+        prompts_path: str = "config/prompts",
     ):
         self._bridge = bridge
         self._llm = llm
         self._tools = tools
         self._agent_id = agent_id
-        self._prompt_builder = PromptBuilder()
+        self._prompt_builder = PromptBuilder(prompts_path=prompts_path)
         self._llm_call_interval_s = llm_call_interval_s
         self._tick_rate_hz = tick_rate_hz
 
@@ -61,7 +62,7 @@ class AgentLoop:
                     continue
 
                 events = await self._bridge.receive_events(timeout=0.05)
-                print("[AGENT]",f"Observation — pos=({obs.agent.position.x:.0f}, {obs.agent.position.y:.0f}) biome={obs.world.get('biome', '?')}")
+                print("[AGENT]",f"Observation — pos=({obs.agent.position.x:.0f}, {obs.agent.position.y:.0f}) layer={obs.world.get('depth_layer', '?')}")
 
                 if self._should_call_llm(obs, events):
                     await self._llm_turn(obs, events)
@@ -107,7 +108,7 @@ class AgentLoop:
         dprint("[AGENT]","Calling LLM...")
         t0 = time.monotonic()
         response = await self._llm.generate(
-            system_prompt=PromptBuilder.get_system_prompt(),
+            system_prompt=self._prompt_builder.get_system_prompt(),
             messages=self._conversation_history,
             tools=self._tools.get_definitions(),
         )
@@ -177,7 +178,7 @@ class AgentLoop:
                 )
 
                 follow_up = await self._llm.generate(
-                    system_prompt=PromptBuilder.get_system_prompt(),
+                    system_prompt=self._prompt_builder.get_system_prompt(),
                     messages=self._conversation_history + messages,
                     tools=self._tools.get_definitions(),
                 )

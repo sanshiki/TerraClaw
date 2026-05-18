@@ -77,6 +77,11 @@ class ReplayConfig:
 
 
 @dataclass
+class PromptConfig:
+    prompts_path: str = "config/prompts"
+
+
+@dataclass
 class RuntimeConfig:
     bridge: BridgeConfig = field(default_factory=BridgeConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
@@ -85,8 +90,10 @@ class RuntimeConfig:
     recovery: RecoveryConfig = field(default_factory=RecoveryConfig)
     sandbox: SandboxConfig = field(default_factory=SandboxConfig)
     replay: ReplayConfig = field(default_factory=ReplayConfig)
+    prompt: PromptConfig = field(default_factory=PromptConfig)
     tick_rate_hz: float = 10.0
     llm_call_interval_s: float = 5.0
+    actions_path: str = "config/actions.yaml"
     log_level: str = "INFO"
     verbose: bool = False
 
@@ -107,8 +114,10 @@ class RuntimeConfig:
             recovery=RecoveryConfig(**data.get("recovery", {})),
             sandbox=SandboxConfig(**data.get("sandbox", {})),
             replay=ReplayConfig(**data.get("replay", {})),
+            prompt=PromptConfig(**data.get("prompt", {})),
             tick_rate_hz=data.get("tick_rate_hz", 10.0),
             llm_call_interval_s=data.get("llm_call_interval_s", 5.0),
+            actions_path=data.get("actions_path", "config/actions.yaml"),
             log_level=data.get("log_level", "INFO"),
             verbose=data.get("verbose", False),
         )

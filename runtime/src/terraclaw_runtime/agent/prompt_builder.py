@@ -2,56 +2,42 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from terraclaw_runtime.bridge.message import AgentObservation
 
-SYSTEM_PROMPT = """You are an autonomous NPC agent inside Terraria. You float through the world with no collision or gravity, and you can manipulate tiles and walls directly.
-
-## YOUR CAPABILITIES
-You have access to tools that let you:
-- Fly to any world coordinate (move_to / teleport)
-- Break tiles and walls at specific tile positions
-- Place tiles and walls at specific tile positions
-- Wait for a duration
-
-## IMPORTANT RULES
-1. You issue one action at a time. Wait for the result before issuing the next.
-2. World coordinates are in pixels. Tile coordinates are grid positions (pixel / 16).
-3. Y increases downward (Terraria convention).
-4. You can fly through walls and don't take damage.
-5. You have no inventory — you can place tiles/walls directly using type IDs.
-   Common IDs: 0=dirt, 1=stone, 2=grass, 3=dirt_block, 9=sand, 53=wood
-6. Think step by step. Break complex building tasks into smaller actions.
-7. Report what you observe and what you plan to do.
-
-## YOUR MISSION
-You are a curious explorer. Fly around the world and observe your surroundings.
-- If you see interesting structures, NPCs, or biomes, move closer to investigate.
-- You can break blocks to dig or clear space, and place blocks to build simple structures.
-- Be creative — try to interact with the world in interesting ways.
-- If you see nothing special, pick a direction and explore.
-
-## COORDINATE SYSTEM
-- Your position is in pixels: (x, y)
-- Tiles are at integer grid positions: tile_x = pixel_x / 16
-- The world extends from tile (0, 0) to (world_width, world_height)
-- Y increases downward
-
-## RESPONSE FORMAT
-After observing the game state, respond with:
-1. Brief analysis of your situation and what you see
-2. Your current goal or plan
-3. The tool call(s) you want to execute
-
-Be concise. State what you're doing and why."""
+# Embedded fallback prompt for when the markdown file is unavailable
+_FALLBACK_SYSTEM_PROMPT = (
+    "You are an autonomous NPC agent inside Terraria. "
+    "You float through the world with no collision or gravity."
+)
 
 
 class PromptBuilder:
-    """Assembles LLM context for the NPC agent."""
+    """Assembles LLM context for the NPC agent.
 
-    def __init__(self, max_context_tokens: int = 8000):
+    Loads the system prompt from a markdown file on first access.
+    """
+
+    def __init__(self, prompts_path: str = "config/prompts", max_context_tokens: int = 8000):
+        self._prompts_path = Path(prompts_path)
         self._max_tokens = max_context_tokens
+        self._system_prompt: str | None = None
+
+    def get_system_prompt(self, variables: dict[str, str] | None = None) -> str:
+        """Return the system prompt, loading from markdown on first call.
+
+        Supports {variable} substitution in the prompt text.
+        """
+        if self._system_prompt is None:
+            self._system_prompt = self._load_prompt("system.md")
+
+        prompt = self._system_prompt
+        if variables:
+            for key, val in variables.items():
+                prompt = prompt.replace(f"{{{key}}}", val)
+        return prompt
 
     def build(
         self,
@@ -74,9 +60,12 @@ class PromptBuilder:
 
         return messages
 
-    @staticmethod
-    def get_system_prompt() -> str:
-        return SYSTEM_PROMPT
+    def _load_prompt(self, name: str) -> str:
+        """Load a prompt from a markdown file, falling back to embedded default."""
+        path = self._prompts_path / name
+        if path.exists():
+            return path.read_text(encoding="utf-8").strip()
+        return _FALLBACK_SYSTEM_PROMPT
 
     def _format_observation(self, obs: AgentObservation) -> str:
         a = obs.agent
@@ -85,7 +74,7 @@ class PromptBuilder:
 
         lines = [
             f"Tick: {obs.tick} | Time: {w.get('time', {}).get('hour', 0):.0f}:{w.get('time', {}).get('minute', 0):02.0f} {'(day)' if w.get('time', {}).get('is_day') else '(night)'}",
-            f"Biome: {w.get('biome', 'unknown')} | Weather: {w.get('weather', 'clear')} | Hardmode: {w.get('hardmode', False)}",
+            f"Layer: {w.get('depth_layer', '?')} | Weather: {w.get('weather', 'clear')} | Hardmode: {w.get('hardmode', False)}",
             "",
             f"Position: ({a.position.x:.0f}, {a.position.y:.0f}) px | Tile: ({a.tile_position[0]}, {a.tile_position[1]})",
             f"Velocity: ({a.velocity.x:.1f}, {a.velocity.y:.1f}) | Direction: {a.direction}",
@@ -121,16 +110,16 @@ class PromptBuilder:
         if events:
             lines.append(f"Active events: {', '.join(events)}")
 
-        # Interesting tiles nearby
+        # Interesting tiles nearby with positions
         spatial = obs.spatial_window
         interesting = spatial.get("tiles", {}).get("interesting", [])
         if interesting:
-            lines.append("\nNotable tiles nearby:")
-            type_counts: dict[str, int] = {}
-            for t in interesting:
+            lines.append("\nNotable tiles nearby (tile coordinates):")
+            for t in interesting[:20]:
+                pos = t.get("pos", {})
+                tx = pos.get("x", "?")
+                ty = pos.get("y", "?")
                 ttype = t.get("type", "unknown")
-                type_counts[ttype] = type_counts.get(ttype, 0) + 1
-            for ttype, count in sorted(type_counts.items()):
-                lines.append(f"  {ttype}: {count}")
+                lines.append(f"  ({tx}, {ty}) {ttype}")
 
         return "\n".join(lines)

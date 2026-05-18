@@ -7,11 +7,13 @@ import signal
 
 import structlog
 
+from terraclaw_runtime.agent.action_registry import ActionRegistry
 from terraclaw_runtime.agent.llm import LLMClient
 from terraclaw_runtime.agent.loop import AgentLoop
 from terraclaw_runtime.agent.tool_registry import ToolRegistry
 from terraclaw_runtime.bridge.client import BridgeClient
 from terraclaw_runtime.config import RuntimeConfig
+from terraclaw_runtime.skills.registry import SkillRegistry
 
 logger = structlog.get_logger()
 
@@ -25,6 +27,7 @@ class TerraClawRuntime:
         self._llm = LLMClient(config.llm)
         self._agent_id: str | None = None
         self._tools: ToolRegistry | None = None
+        self._skills: SkillRegistry | None = None
         self._agent: AgentLoop | None = None
 
     async def start(self) -> None:
@@ -51,8 +54,17 @@ class TerraClawRuntime:
             self._agent_id = result.get("agent_id")
             logger.info("agent_registered", agent_id=self._agent_id, entity_index=result.get("entity_index"))
 
-            # Build tool registry and agent loop with agent_id
-            self._tools = ToolRegistry(self._bridge, self._agent_id)
+            # Build action registry and tool registry
+            actions = ActionRegistry(self._config.actions_path)
+            actions.load()
+            self._tools = ToolRegistry(actions, self._bridge, self._agent_id)
+
+            # Build skill registry (loads Lua skills from config/skills/)
+            self._skills = SkillRegistry(self._bridge)
+            loaded = self._skills.load_from_directory(self._config.skill.skill_definitions_path)
+            if loaded:
+                logger.info("lua_skills_loaded", count=loaded)
+
             self._agent = AgentLoop(
                 bridge=self._bridge,
                 llm=self._llm,
@@ -60,6 +72,7 @@ class TerraClawRuntime:
                 agent_id=self._agent_id,
                 llm_call_interval_s=self._config.llm_call_interval_s,
                 tick_rate_hz=self._config.tick_rate_hz,
+                prompts_path=self._config.prompt.prompts_path,
             )
 
             await self._agent.run()

@@ -17,6 +17,7 @@ dependencies = [
     "pydantic>=2.9.0",
     "httpx>=0.28.0",
     "aiofiles>=24.1.0",
+    "lupa>=2.2",
 ]
 
 [project.optional-dependencies]

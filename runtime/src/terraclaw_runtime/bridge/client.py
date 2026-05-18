@@ -18,7 +18,6 @@ from terraclaw_runtime.bridge.message import (
     AgentObservation,
     GameEvent,
     MessageEnvelope,
-    Observation,
 )
 from terraclaw_runtime.config import BridgeConfig
 
@@ -32,6 +31,7 @@ class BridgeClient:
         self._config = config
         self._ws: ClientConnection | None = None
         self._session_id: str | None = None
+        self.agent_id: str | None = None  # set after register_agent
         self._connected = False
         self._rx_queue: asyncio.Queue[MessageEnvelope] = asyncio.Queue(maxsize=500)
         self._tx_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=200)
@@ -197,7 +197,8 @@ class BridgeClient:
         while time.monotonic() < deadline:
             msg = await self.receive(timeout=1.0)
             if msg and msg.type == "agent.registered":
-                print(f"[BRIDGE] Agent registered: id={msg.payload.get('agent_id', '?')[:8]}... "
+                self.agent_id = msg.payload.get("agent_id")
+                print(f"[BRIDGE] Agent registered: id={self.agent_id[:8] if self.agent_id else '?'}... "
                       f"pos=({msg.payload.get('position', {}).get('x', '?')}, {msg.payload.get('position', {}).get('y', '?')})")
                 return msg.payload
         print("[BRIDGE] Agent registration timed out!")
@@ -261,15 +262,6 @@ class BridgeClient:
             return await asyncio.wait_for(self._rx_queue.get(), timeout=timeout)
         except asyncio.TimeoutError:
             return None
-
-    async def receive_observation(self, timeout: float = 1.0) -> Observation | None:
-        """Receive the next observation.state message."""
-        while True:
-            msg = await self.receive(timeout=timeout)
-            if msg is None:
-                return None
-            if msg.type == "observation.state":
-                return Observation.from_payload(msg.payload)
 
     async def receive_events(self, timeout: float = 0.1) -> list[GameEvent]:
         """Drain all pending observation.event messages."""

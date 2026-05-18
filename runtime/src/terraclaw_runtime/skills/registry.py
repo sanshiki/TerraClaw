@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from terraclaw_runtime.bridge.client import BridgeClient
-from terraclaw_runtime.bridge.message import Observation
+from terraclaw_runtime.skills.lua_skill import LuaSkill
+
+if TYPE_CHECKING:
+    from terraclaw_runtime.bridge.message import AgentObservation as Observation
 
 
 class SkillRunner(Protocol):
@@ -42,7 +46,11 @@ class SkillStats:
 
 
 class SkillRegistry:
-    """Registry of reusable skills the LLM can invoke."""
+    """Registry of reusable skills the LLM can invoke.
+
+    Supports both Python-based SkillRunner implementations and
+    .lua scripts loaded from a directory.
+    """
 
     def __init__(self, bridge: BridgeClient):
         self._bridge = bridge
@@ -54,6 +62,20 @@ class SkillRegistry:
         self._skills[skill.name] = skill
         self._stats[skill.name] = SkillStats()
 
+    def load_from_directory(self, path: str | Path) -> int:
+        """Load all .lua files from a directory as skills."""
+        skills_dir = Path(path)
+        if not skills_dir.is_dir():
+            return 0
+
+        loaded = 0
+        for lua_file in sorted(skills_dir.glob("*.lua")):
+            lua_skill = LuaSkill(lua_file)
+            wrapper = _LuaSkillWrapper(lua_skill)
+            self.register(wrapper)
+            loaded += 1
+        return loaded
+
     def has_active(self) -> bool:
         return self._active_skill is not None
 
@@ -61,10 +83,6 @@ class SkillRegistry:
         return self._skills.get(name)
 
     def describe_all(self) -> str:
-        """Generate a text description of all available skills for the LLM prompt."""
-        if not self._skills:
-            return "No skills available."
-
         lines = ["Available skills:"]
         for name, skill in self._skills.items():
             stats = self._stats.get(name, SkillStats())
@@ -73,7 +91,6 @@ class SkillRegistry:
         return "\n".join(lines)
 
     def get_tool_definitions(self) -> list[dict[str, Any]]:
-        """Generate LLM tool definitions for skills."""
         return [
             {
                 "type": "function",
@@ -93,18 +110,15 @@ class SkillRegistry:
 
     async def execute_skill(self, name: str, params: dict[str, Any],
                             obs: Observation) -> SkillResult:
-        """Execute a skill by name."""
         skill = self._skills.get(name)
         if skill is None:
             return SkillResult(success=False, message=f"Unknown skill: {name}")
 
-        # Check preconditions
         ok, reason = await skill.check_preconditions(obs, params)
         if not ok:
             self._record_result(name, False)
             return SkillResult(success=False, message=f"Precondition failed: {reason}")
 
-        # Execute
         self._active_skill = name
         try:
             result = await skill.execute(self._bridge, obs, params)
@@ -125,9 +139,37 @@ class SkillRegistry:
             stats.failures += 1
 
     def recommend(self, obs: Observation) -> list[str]:
-        """Recommend skills based on current context and past success."""
         recommended = []
         for name, stats in self._stats.items():
             if stats.attempts >= 3 and stats.success_rate >= 0.7:
                 recommended.append(name)
         return recommended
+
+
+class _LuaSkillWrapper:
+    """Wraps a LuaSkill to conform to the SkillRunner Protocol."""
+
+    def __init__(self, lua_skill: LuaSkill):
+        self._skill = lua_skill
+
+    @property
+    def name(self) -> str:
+        return self._skill.name
+
+    @property
+    def description(self) -> str:
+        return self._skill.description
+
+    async def check_preconditions(self, obs: Observation, params: dict[str, Any]) -> tuple[bool, str]:
+        return self._skill.check_preconditions(obs, params)
+
+    async def execute(self, bridge: BridgeClient, obs: Observation, params: dict[str, Any]) -> SkillResult:
+        result = await self._skill.execute(bridge, obs, params)
+        return SkillResult(
+            success=result.get("success", False),
+            message=result.get("message", result.get("error", "")),
+            data=result,
+        )
+
+    async def cancel(self) -> None:
+        pass

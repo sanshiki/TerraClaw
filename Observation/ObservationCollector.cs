@@ -4,7 +4,8 @@ using Terraria;
 using Terraria.GameContent.Events;
 using Terraria.ID;
 using TerraClaw.Network;
-
+using Microsoft.Xna.Framework;
+using Terraria.ModLoader;
 namespace TerraClaw.Observation;
 
 public class ObservationCollector
@@ -38,7 +39,7 @@ public class ObservationCollector
                 tile_position = new { x = (int)(npc.Center.X / 16), y = (int)(npc.Center.Y / 16) },
                 direction = npc.direction == 1 ? "right" : "left",
             },
-            world = ExtractWorldState(),
+            world = ExtractWorldState(npc.Center),
             spatial_window = _spatialWindow.Extract(npc.Center, _spatialRadius),
             entities = _entityExtractor.Extract(npc.Center, npc.whoAmI),
         };
@@ -46,7 +47,7 @@ public class ObservationCollector
         return MessageSerializer.BuildMessage("agent.observation", observation);
     }
 
-    private object ExtractWorldState()
+    private object ExtractWorldState(Vector2 center)
     {
         return new
         {
@@ -56,55 +57,53 @@ public class ObservationCollector
                 minute = (Main.time % 3600) / 60.0,
                 is_day = Main.dayTime,
             },
-            weather = GetWeather(),
-            biome = GetPlayerBiome(),
-            nearby_biomes = GetNearbyBiomes(),
+            // weather = GetWeather(),
+            biome = GetBiomeAt(center),
             active_events = GetActiveEvents(),
             bosses_alive = GetBossesAlive(),
             invasion = GetInvasion(),
             hardmode = Main.hardMode,
-            evil_type = WorldGen.crimson ? "crimson" : "corruption",
+            depth_layer = GetDepthLayer(center),
         };
     }
 
-    private static string GetWeather()
+    private static string GetBiomeAt(Vector2 center)
     {
-        if (Main.slimeRain) return "slime_rain";
-        if (Sandstorm.Happening) return "sandstorm";
-        if (Main.raining && Main.LocalPlayer.ZoneSnow) return "blizzard";
-        if (Main.raining) return "rain";
-        return "clear";
+        int tx = (int)(center.X / 16);
+        int ty = (int)(center.Y / 16);
+
+        // Check tile types at position for biome detection
+        if (tx >= 0 && tx < Main.maxTilesX && ty >= 0 && ty < Main.maxTilesY)
+        {
+            var tile = Main.tile[tx, ty];
+            if (tile != null && tile.HasTile)
+            {
+                int t = tile.TileType;
+                if (t == TileID.Sand || t == TileID.HardenedSand || t == TileID.Sandstone)
+                    return "desert";
+                if (t == TileID.SnowBlock || t == TileID.IceBlock)
+                    return "snow";
+                if (t == TileID.Mud || t == TileID.JungleGrass)
+                    return "jungle";
+                if (t == TileID.Grass || t == TileID.HallowedGrass)
+                    return "surface";
+            }
+        }
+
+        if (ty > Main.maxTilesY - 200) return "underworld";
+        if (ty >= Main.rockLayer) return "underground";
+        if (ty < Main.worldSurface * 0.2) return "sky";
+        return "forest";
     }
 
-    private static string GetPlayerBiome()
+    private static string GetDepthLayer(Vector2 center)
     {
-        var player = Main.LocalPlayer;
-        return player.ZoneCorrupt ? "corruption" :
-               player.ZoneCrimson ? "crimson" :
-               player.ZoneHallow ? "hallow" :
-               player.ZoneDesert ? "desert" :
-               player.ZoneSnow ? "snow" :
-               player.ZoneJungle ? "jungle" :
-               player.ZoneDungeon ? "dungeon" :
-               player.ZoneBeach ? "ocean" :
-               player.ZoneGlowshroom ? "mushroom" :
-               player.ZoneUnderworldHeight ? "underworld" :
-               player.ZoneSkyHeight ? "sky" :
-               player.ZoneRockLayerHeight ? "underground" :
-               "forest";
-    }
-
-    private static List<string> GetNearbyBiomes()
-    {
-        var biomes = new List<string>();
-        var player = Main.LocalPlayer;
-        if (player.ZoneCorrupt) biomes.Add("corruption");
-        if (player.ZoneCrimson) biomes.Add("crimson");
-        if (player.ZoneHallow) biomes.Add("hallow");
-        if (player.ZoneDesert) biomes.Add("desert");
-        if (player.ZoneSnow) biomes.Add("snow");
-        if (player.ZoneJungle) biomes.Add("jungle");
-        return biomes;
+        int ty = (int)(center.Y / 16);
+        if (ty > Main.maxTilesY - 200) return "underworld";
+        if (ty >= Main.rockLayer) return "cavern";
+        if (ty >= Main.worldSurface) return "underground";
+        if (ty < Main.worldSurface * 0.2) return "sky";
+        return "surface";
     }
 
     private static List<string> GetActiveEvents()

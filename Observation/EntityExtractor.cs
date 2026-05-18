@@ -105,7 +105,6 @@ public class EntityExtractor
         var npcs = new List<object>();
         var items = new List<object>();
         var projectiles = new List<object>();
-        var players = new List<object>();
 
         // Extract NPCs
         for (int i = 0; i < Main.maxNPCs; i++)
@@ -168,23 +167,6 @@ public class EntityExtractor
             });
         }
 
-        // Extract other players (multiplayer)
-        for (int i = 0; i < Main.maxPlayers; i++)
-        {
-            var other = Main.player[i];
-            if (!other.active || other.whoAmI == Main.myPlayer) continue;
-
-            var dist = Vector2.Distance(center, other.Center);
-            if (dist > MaxEntityDistance) continue;
-
-            players.Add(new
-            {
-                index = other.whoAmI,
-                name = other.name,
-                position = new { x = (double)other.position.X, y = (double)other.position.Y },
-            });
-        }
-
-        return new { npcs, items_on_ground = items, projectiles, players };
+        return new { npcs, items_on_ground = items, projectiles };
     }
 }
