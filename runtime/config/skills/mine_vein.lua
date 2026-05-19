@@ -12,18 +12,19 @@ return {
         local px = tx * 16
         local py = ty * 16
 
-        -- Move to position
-        ctx:send_action("move_to", {
+        -- Move to position (non-blocking, get action_id)
+        local move_id = ctx:start_action("move_to", {
             x = px,
             y = py,
             speed = 6.0,
             arrival_radius = 16.0,
         })
 
-        ctx:wait(300)
+        -- Wait for movement to complete before breaking
+        ctx:wait_for(move_id)
 
-        -- Break the tile
-        local break_result = ctx:send_action("break_tile", {
+        -- Break the tile (fire-and-forget, no need to wait)
+        ctx:start_action("break_tile", {
             tx = tx,
             ty = ty,
         })
@@ -31,7 +32,6 @@ return {
         return {
             success = true,
             message = "Mined tile at (" .. tx .. ", " .. ty .. ")",
-            result = break_result,
         }
     end,
 }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 
 import structlog
@@ -12,11 +13,21 @@ from terraclaw_runtime.agent.prompt_builder import PromptBuilder
 from terraclaw_runtime.agent.tool_registry import ToolRegistry
 from terraclaw_runtime.bridge.client import BridgeClient
 from terraclaw_runtime.bridge.message import AgentObservation
-from terraclaw_runtime.planning.plan import Plan, PlanStatus
+from terraclaw_runtime.planning.plan import Plan
 
 from terraclaw_runtime._debug import dprint
 
 logger = structlog.get_logger()
+
+
+def _has_tool_result(msg: dict) -> bool:
+    """Check if a conversation message contains a tool_result content block."""
+    content = msg.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                return True
+    return False
 
 
 class AgentLoop:
@@ -31,6 +42,7 @@ class AgentLoop:
         llm_call_interval_s: float = 5.0,
         tick_rate_hz: float = 10.0,
         prompts_path: str = "config/prompts",
+        max_history_messages: int = 10,
     ):
         self._bridge = bridge
         self._llm = llm
@@ -39,10 +51,13 @@ class AgentLoop:
         self._prompt_builder = PromptBuilder(prompts_path=prompts_path)
         self._llm_call_interval_s = llm_call_interval_s
         self._tick_rate_hz = tick_rate_hz
+        self._max_history_messages = max_history_messages
 
         self._last_llm_call_time = 0.0
         self._plan: Plan | None = None
         self._action_results: list[str] = []
+        self._pending_actions: dict[str, float] = {}  # action_id → start_time
+        self._recently_resolved: dict[str, float] = {}  # action_id → timestamp; recently completed/cancelled, shown in prompt for a few turns
         self._conversation_history: list[dict] = []
         self._running = False
 
@@ -79,9 +94,6 @@ class AgentLoop:
         self._running = False
 
     def _should_call_llm(self, obs: AgentObservation, events: list) -> bool:
-        if self._plan is None or self._plan.status == PlanStatus.COMPLETE:
-            return True
-
         elapsed = time.monotonic() - self._last_llm_call_time
         return elapsed >= self._llm_call_interval_s
 
@@ -92,6 +104,9 @@ class AgentLoop:
 
         memory_context = ""
         plan_context = self._format_plan() if self._plan else ""
+        pending_context, completed_context = await self._format_pending_actions()
+        resolved_context = self._format_resolved_actions()
+        instructions = await self._drain_instructions()
         action_results = "\n".join(self._action_results[-5:]) if self._action_results else ""
 
         messages = self._prompt_builder.build(
@@ -99,13 +114,22 @@ class AgentLoop:
             memory_context=memory_context,
             plan_context=plan_context,
             action_results=action_results,
+            pending_context=pending_context,
+            completed_context=completed_context,
+            resolved_context=resolved_context,
+            instructions=instructions,
         )
 
         self._conversation_history.extend(messages)
-        if len(self._conversation_history) > 20:
-            self._conversation_history = self._conversation_history[-20:]
+        self._truncate_history()
 
         dprint("[AGENT]","Calling LLM...")
+        logger.debug("llm_call", tick=obs.tick, messages=len(self._conversation_history),
+                     tools=len(self._tools.get_definitions()), msg="LLM generating response",
+                     pending_actions=len(self._pending_actions) if self._pending_actions else 0,
+                     has_instructions=bool(instructions),
+                     action_results=len(self._action_results),
+                     pos=(obs.agent.position.x, obs.agent.position.y))
         t0 = time.monotonic()
         response = await self._llm.generate(
             system_prompt=self._prompt_builder.get_system_prompt(),
@@ -123,11 +147,17 @@ class AgentLoop:
         await self._handle_llm_response(response, obs)
         self._action_results.clear()
 
-    async def _handle_llm_response(self, response: LLMResponse, obs: AgentObservation) -> None:
+        # Truncate history again after tool results were added by _handle_llm_response,
+        # so a burst of tool calls doesn't flood the history and push out assistant context.
+        self._truncate_history()
+
+    async def _handle_llm_response(self, response: LLMResponse, obs: AgentObservation, allow_follow_up: bool = True) -> None:
         logger.debug("llm_response",
                      text=response.text[:200] if response.text else "",
                      tool_calls=[tc.name for tc in response.tool_calls],
-                     tokens=response.usage.input_tokens)
+                     tokens=response.usage.input_tokens,
+                     finish_reason=response.stop_reason,
+                     tool_args=[str(tc.arguments)[:120] for tc in response.tool_calls])
 
         content_blocks = []
         if response.text:
@@ -142,10 +172,31 @@ class AgentLoop:
             "content": content_blocks if content_blocks else None,
         })
 
+        # Internal tools (cancel_action, get_action_status) complete immediately
+        # and don't need a follow-up — treat them as non-blocking.
+        _IMMEDIATE_INTERNAL = frozenset({"cancel_action", "get_action_status"})
+        all_non_blocking = True
+
         for tc in response.tool_calls:
             print("[AGENT]",f"  >> {tc.name}({tc.arguments})")
             result = await self._tools.dispatch(tc.name, tc.arguments)
             logger.debug("tool_result", tool=tc.name, result=str(result)[:200])
+
+            # Track actions that were started (non-blocking dispatch)
+            if result.get("status") == "started" and result.get("action_id"):
+                self._pending_actions[result["action_id"]] = time.monotonic()
+            elif tc.name not in _IMMEDIATE_INTERNAL:
+                # Only non-internal tools that return immediately trigger follow-up
+                all_non_blocking = False
+
+            # Clean up pending_actions immediately when cancelled
+            if tc.name == "cancel_action":
+                cancelled_id = result.get("action_id", "")
+                if cancelled_id in self._pending_actions:
+                    del self._pending_actions[cancelled_id]
+                    dprint("[AGENT]", f"  Removed cancelled action {cancelled_id[:12]}... from pending")
+                if cancelled_id:
+                    self._recently_resolved[cancelled_id] = time.monotonic()
 
             status = result.get("status", "unknown")
             err = result.get("error")
@@ -165,25 +216,161 @@ class AgentLoop:
                 }],
             })
 
+        # Follow-up: only when (a) there's a meaningful immediate result to show,
+        # (b) depth is limited to 1 (no recursive cascade), (c) messages are truncated.
         if response.tool_calls and response.stop_reason in ("tool_use", "tool_calls"):
-            dprint("[AGENT]","── Follow-up LLM call (tool results sent back) ──")
-            await asyncio.sleep(0.5)
-            fresh_obs = await self._bridge.receive_agent_observation(timeout=2.0)
-            if fresh_obs:
-                messages = self._prompt_builder.build(
-                    observation=fresh_obs,
-                    memory_context="",
-                    plan_context="",
-                    action_results="\n".join(self._action_results[-5:]),
-                )
+            if all_non_blocking:
+                dprint("[AGENT]", "── Skipping follow-up (all actions non-blocking) ──")
+            elif not allow_follow_up:
+                dprint("[AGENT]", "── Skipping follow-up (max depth reached) ──")
+            else:
+                dprint("[AGENT]","── Follow-up LLM call ──")
+                await asyncio.sleep(0.5)
+                fresh_obs = await self._bridge.receive_agent_observation(timeout=2.0)
+                if fresh_obs:
+                    pending_context, completed_context = await self._format_pending_actions()
+                    resolved_context = self._format_resolved_actions()
+                    messages = self._prompt_builder.build(
+                        observation=fresh_obs,
+                        memory_context="",
+                        plan_context="",
+                        action_results="\n".join(self._action_results[-5:]),
+                        pending_context=pending_context,
+                        completed_context=completed_context,
+                        resolved_context=resolved_context,
+                        instructions=await self._drain_instructions(),
+                    )
 
-                follow_up = await self._llm.generate(
-                    system_prompt=self._prompt_builder.get_system_prompt(),
-                    messages=self._conversation_history + messages,
-                    tools=self._tools.get_definitions(),
-                )
-                dprint("[AGENT]","Follow-up LLM response received")
-                await self._handle_llm_response(follow_up, fresh_obs)
+                    # Truncate combined history to max_history_messages
+                    combined = self._conversation_history + messages
+                    if len(combined) > self._max_history_messages:
+                        combined = combined[-self._max_history_messages:]
+                    while combined and _has_tool_result(combined[0]):
+                        combined.pop(0)
+
+                    logger.debug("llm_call", tick=fresh_obs.tick, messages=len(combined),
+                                 tools=len(self._tools.get_definitions()), msg="LLM follow-up generation",
+                                 pending_actions=len(self._pending_actions) if self._pending_actions else 0)
+                    follow_up = await self._llm.generate(
+                        system_prompt=self._prompt_builder.get_system_prompt(),
+                        messages=combined,
+                        tools=self._tools.get_definitions(),
+                    )
+                    dprint("[AGENT]","Follow-up LLM response received")
+                    await self._handle_llm_response(follow_up, fresh_obs, allow_follow_up=False)
+
+    def _truncate_history(self) -> None:
+        """Truncate conversation_history to max_history_messages and remove stale action refs."""
+        if len(self._conversation_history) > self._max_history_messages:
+            self._conversation_history = self._conversation_history[-self._max_history_messages:]
+        # OpenAI API requires role:tool messages to follow role:assistant with tool_calls.
+        # Truncation may strip the assistant but keep the tool_result; clean those up.
+        while self._conversation_history and _has_tool_result(self._conversation_history[0]):
+            self._conversation_history.pop(0)
+
+        # Strip assistant+tool_result pairs referencing completed/cancelled actions.
+        remove_indices: set[int] = set()
+        _TERMINAL = ("'cancelled'", "'completed'", "'already_cancelled'")
+        for i in range(len(self._conversation_history) - 1, -1, -1):
+            content = str(self._conversation_history[i].get("content", ""))
+            if any(m in content for m in _TERMINAL):
+                remove_indices.add(i)
+                if i > 0 and self._conversation_history[i - 1].get("role") == "assistant":
+                    remove_indices.add(i - 1)
+
+        # Also remove tool_results whose action_id is no longer pending — these are
+        # stale "started" entries from actions that completed without a terminal status.
+        for i in range(len(self._conversation_history) - 1, -1, -1):
+            if i in remove_indices:
+                continue
+            content = str(self._conversation_history[i].get("content", ""))
+            # Extract action_ids from tool_result content
+            for m in re.finditer(r"'action_id':\s*'([^']+)'", content):
+                aid = m.group(1)
+                if aid not in self._pending_actions:
+                    remove_indices.add(i)
+                    if i > 0 and self._conversation_history[i - 1].get("role") == "assistant":
+                        remove_indices.add(i - 1)
+                    break
+
+        if remove_indices:
+            self._conversation_history = [
+                m for j, m in enumerate(self._conversation_history) if j not in remove_indices
+            ]
+
+    async def _drain_instructions(self) -> str:
+        """Drain all pending chat instructions from the bridge."""
+        lines = []
+        while True:
+            instr = await self._bridge.receive_instruction(timeout=0.05)
+            if instr is None:
+                break
+            lines.append(f"- {instr}")
+        if not lines:
+            return ""
+        return "The player has sent you these instructions:\n" + "\n".join(lines)
+
+    async def _format_pending_actions(self) -> tuple[str, str]:
+        """Return (pending_actions_str, completed_actions_str) for LLM context.
+
+        Checks the bridge for completed actions so the LLM gets timely
+        feedback instead of stale "running" entries.
+        """
+        if not self._pending_actions:
+            return "", ""
+
+        now = time.monotonic()
+        pending_lines: list[str] = []
+        completed_lines: list[str] = []
+        to_remove: list[str] = []
+
+        for aid, start in list(self._pending_actions.items()):
+            # Check if the action has completed via the bridge's future
+            result = await self._bridge.poll_action_result(aid)
+            if result is not None:
+                status = result.get("status", "completed")
+                action_type = result.get("action_type", "unknown")
+                completed_lines.append(f"  {action_type} ({aid[:12]}...) → {status}")
+                self._recently_resolved[aid] = time.monotonic()
+                to_remove.append(aid)
+            elif now - start > 120:
+                # Stale entry — likely lost/crashed
+                to_remove.append(aid)
+            else:
+                elapsed = now - start
+                pending_lines.append(f"  {aid[:12]}... running for {elapsed:.0f}s")
+
+        for aid in to_remove:
+            self._pending_actions.pop(aid, None)
+
+        pending_str = "\n".join(pending_lines) if pending_lines else ""
+        completed_str = "\n".join(completed_lines) if completed_lines else ""
+
+        if completed_lines:
+            dprint("[AGENT]", f"Completed actions:\n{completed_str}")
+
+        return pending_str, completed_str
+
+    def _format_resolved_actions(self) -> str:
+        """Format recently resolved (completed/cancelled) action_ids for LLM context.
+
+        Shown for ~60s after resolution so the LLM knows not to poll stale IDs.
+        """
+        if not self._recently_resolved:
+            return ""
+        now = time.monotonic()
+        lines: list[str] = []
+        stale: list[str] = []
+        for aid, ts in list(self._recently_resolved.items()):
+            if now - ts > 60:
+                stale.append(aid)
+            else:
+                lines.append(f"  {aid[:12]}...")
+        for aid in stale:
+            del self._recently_resolved[aid]
+        if not lines:
+            return ""
+        return "The following actions were recently completed or cancelled (do not check on them again):\n" + "\n".join(lines)
 
     def _format_plan(self) -> str:
         if self._plan is None:

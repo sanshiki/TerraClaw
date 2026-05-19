@@ -8,6 +8,15 @@ from typing import Any
 import yaml
 
 
+# Action names that are handled locally (not sent to the bridge).
+_INTERNAL_ACTIONS = frozenset({"get_action_status", "cancel_action"})
+
+
+def is_internal(name: str) -> bool:
+    """Return True if the action is handled locally rather than sent to the bridge."""
+    return name in _INTERNAL_ACTIONS
+
+
 class ActionRegistry:
     """Registry of atomic action definitions loaded from a YAML file.
 

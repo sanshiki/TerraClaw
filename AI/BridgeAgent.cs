@@ -55,13 +55,25 @@ public class BridgeAgent : TerraClawAgent
         }
 
         _currentActionTick++;
-        var result = ExecuteAction(_currentAction, _currentActionTick);
+        AgentActionResult result;
+        try
+        {
+            result = ExecuteAction(_currentAction, _currentActionTick);
+        }
+        catch (Exception ex)
+        {
+            Main.NewText($"[NPC] Error in {_currentAction.ActionType}: {ex.Message}", 255, 80, 80);
+            ReportActionResult(_currentAction, AgentActionResult.Failed("EXCEPTION", ex.Message));
+            _currentAction = null;
+            return;
+        }
 
         if (result != null)
         {
             Main.NewText($"[NPC] Done: {_currentAction.ActionType} success={result.Success}", 100, 255, 100);
-            ReportActionResult(_currentAction, result);
+            var completed = _currentAction;
             _currentAction = null;
+            ReportActionResult(completed, result);
         }
     }
 
@@ -80,8 +92,13 @@ public class BridgeAgent : TerraClawAgent
     public void ClearQueue()
     {
         while (_actionQueue.TryDequeue(out _)) { }
+        var cancelled = _currentAction;
         _currentAction = null;
         _currentActionTick = 0;
+
+        // Send result for the cancelled action so Python can resolve its future
+        if (cancelled != null)
+            ReportActionResult(cancelled, AgentActionResult.Failed("CANCELLED", "Action was cancelled"));
     }
 
     private AgentActionResult ExecuteAction(PendingAgentAction action, int elapsedTicks)

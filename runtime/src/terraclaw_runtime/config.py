@@ -79,6 +79,7 @@ class ReplayConfig:
 @dataclass
 class PromptConfig:
     prompts_path: str = "config/prompts"
+    max_history_messages: int = 10
 
 
 @dataclass
@@ -94,6 +95,7 @@ class RuntimeConfig:
     tick_rate_hz: float = 10.0
     llm_call_interval_s: float = 5.0
     actions_path: str = "config/actions.yaml"
+    log_file: str = ""
     log_level: str = "INFO"
     verbose: bool = False
 
@@ -118,6 +120,7 @@ class RuntimeConfig:
             tick_rate_hz=data.get("tick_rate_hz", 10.0),
             llm_call_interval_s=data.get("llm_call_interval_s", 5.0),
             actions_path=data.get("actions_path", "config/actions.yaml"),
+            log_file=data.get("log_file", ""),
             log_level=data.get("log_level", "INFO"),
             verbose=data.get("verbose", False),
         )

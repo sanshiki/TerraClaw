@@ -8,7 +8,7 @@
 /docker/
 /TerraClaw.csproj.Iscache
 /TerraClaw.sln
-
+/runtime/logs/
 
 # python cache and egg-info directories
 __pycache__/

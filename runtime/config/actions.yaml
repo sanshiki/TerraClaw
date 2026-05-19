@@ -125,3 +125,27 @@ wait:
         maximum: 60000
         default: 1000
   bridge_action: wait
+
+get_action_status:
+  description: "Check the status of a previously started action by its action_id. Returns the result if completed, or 'running' if still in progress."
+  enabled: true
+  parameters:
+    type: object
+    properties:
+      action_id:
+        type: string
+        description: "The action_id returned when the action was started"
+    required: [action_id]
+  bridge_action: get_action_status
+
+cancel_action:
+  description: "Cancel or interrupt a running action by its action_id."
+  enabled: true
+  parameters:
+    type: object
+    properties:
+      action_id:
+        type: string
+        description: "The action_id to cancel"
+    required: [action_id]
+  bridge_action: cancel_action

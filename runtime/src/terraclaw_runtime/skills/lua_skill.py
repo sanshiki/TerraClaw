@@ -99,6 +99,11 @@ class _SkillContext:
 
     Methods are synchronous (called from Lua in a thread pool) and bridge
     to the async event loop via run_coroutine_threadsafe.
+
+    Three dispatch modes for actions:
+      start_action / send_action  — fire-and-forget, returns action_id immediately
+      poll(action_id)             — non-blocking status check
+      wait_for(action_id)         — blocks until completion (sequential skills)
     """
 
     def __init__(self, loop: asyncio.AbstractEventLoop, bridge: BridgeClient, agent_id: str):
@@ -107,10 +112,9 @@ class _SkillContext:
         self._agent_id = agent_id
 
     def send_action(self, action_type: str, params: dict = None) -> dict:
-        """Send an atomic action and wait for the result."""
+        """Non-blocking: start an action and return immediately with action_id."""
         if params is None:
             params = {}
-
         future = asyncio.run_coroutine_threadsafe(
             self._bridge.send_agent_action(
                 agent_id=self._agent_id,
@@ -120,10 +124,31 @@ class _SkillContext:
             ),
             self._loop,
         )
-        return {"action_id": future.result(timeout=35)}
+        action_id = future.result(timeout=35)
+        return {"status": "started", "action_id": action_id}
 
-    def wait_for_action_result(self, action_id: str, timeout: float = 35.0) -> dict:
-        """Wait for a specific action result."""
+    def start_action(self, action_type: str, params: dict = None) -> dict:
+        """Alias for send_action (non-blocking)."""
+        return self.send_action(action_type, params)
+
+    def poll(self, action_id: str) -> dict:
+        """Non-blocking: check action status without waiting."""
+        future = asyncio.run_coroutine_threadsafe(
+            self._bridge.poll_action_result(action_id),
+            self._loop,
+        )
+        result = future.result(timeout=10)
+        if result is None:
+            return {"action_id": action_id, "status": "running"}
+        return {
+            "action_id": action_id,
+            "status": result.get("status", "completed"),
+            "result": result.get("result"),
+            "error": result.get("error"),
+        }
+
+    def wait_for(self, action_id: str, timeout: float = 60.0) -> dict:
+        """Block until the action completes or timeout."""
         future = asyncio.run_coroutine_threadsafe(
             self._bridge.wait_for_agent_action_result(
                 action_id=action_id,
@@ -132,7 +157,13 @@ class _SkillContext:
             ),
             self._loop,
         )
-        return future.result(timeout=timeout + 5)
+        result = future.result(timeout=timeout + 5)
+        return {
+            "action_id": action_id,
+            "status": result.get("status", "completed"),
+            "result": result.get("result"),
+            "error": result.get("error"),
+        }
 
     def wait(self, duration_ms: int) -> None:
         """Sleep for a duration."""

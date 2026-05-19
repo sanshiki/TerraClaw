@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import structlog
 import websockets
@@ -38,6 +38,10 @@ class BridgeClient:
         self._recv_task: asyncio.Task[None] | None = None
         self._send_task: asyncio.Task[None] | None = None
         self._last_send_time = 0.0
+        self._pending: dict[str, asyncio.Future] = {}
+        self._pending_lock: asyncio.Lock = asyncio.Lock()
+        self._resolved_action_ids: set[str] = set()  # action_ids whose futures have completed
+        self._instructions_queue: asyncio.Queue[str] = asyncio.Queue()
 
     @property
     def connected(self) -> bool:
@@ -129,6 +133,27 @@ class BridgeClient:
                     in_reply_to=envelope.get("in_reply_to"),
                     payload=envelope.get("payload", {}),
                 )
+
+                # Route agent.action.result directly to the waiting future
+                if msg.type == "agent.action.result":
+                    action_id = msg.payload.get("action_id", "")
+                    if action_id:
+                        async with self._pending_lock:
+                            future = self._pending.get(action_id)
+                            if future is not None and not future.done():
+                                future.set_result(msg.payload)
+                                self._pending.pop(action_id, None)
+                                self._resolved_action_ids.add(action_id)
+                                continue
+
+                # Route player.chat instructions to the instructions queue
+                if msg.type == "player.chat":
+                    text = msg.payload.get("text", "")
+                    if text:
+                        await self._instructions_queue.put(text)
+                    continue
+
+                # Everything else goes to the shared queue
                 await self._rx_queue.put(msg)
             except asyncio.TimeoutError:
                 continue
@@ -214,6 +239,13 @@ class BridgeClient:
             "timeout_ms": timeout_ms,
             "action_id": action_id,  # must match the returned ID so C# sends it back
         }
+
+        # Register a future so _recv_loop can route the result back
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        async with self._pending_lock:
+            self._pending[action_id] = future
+
         self._tx_queue.put_nowait(json.dumps({
             "id": action_id,
             "type": "agent.action",
@@ -224,25 +256,73 @@ class BridgeClient:
         return action_id
 
     async def wait_for_agent_action_result(self, action_id: str, agent_id: str, timeout: float = 60.0) -> dict:
-        """Wait for an agent.action.result matching the given action_id and agent_id."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            msg = await self.receive(timeout=0.5)
-            if msg is None:
-                continue
-            if msg.type == "agent.action.result":
-                payload = msg.payload
-                got_action = payload.get("action_id", "")
-                got_agent = payload.get("agent_id", "")
-                if got_agent == agent_id and got_action == action_id:
-                    return payload
-                # Stale result from a different action — discard it
-                dprint("[WAIT]", f"Stale result: expected={action_id[:12]}... got={got_action[:12]}... agent={got_agent[:12]}...")
-        return {"status": "timeout", "error": "Timed out waiting for agent action result"}
+        """Wait for an agent.action.result matching the given action_id (future-based, no polling)."""
+        async with self._pending_lock:
+            future = self._pending.get(action_id)
+        if future is None:
+            return {"status": "unknown", "action_id": action_id}
+        try:
+            result = await asyncio.wait_for(future, timeout=timeout)
+            async with self._pending_lock:
+                self._resolved_action_ids.add(action_id)
+            return result
+        except asyncio.TimeoutError:
+            return {"status": "timeout", "action_id": action_id, "error": "Timed out waiting for agent action result"}
+        finally:
+            async with self._pending_lock:
+                self._pending.pop(action_id, None)
+
+    async def has_pending_action(self, action_id: str) -> bool:
+        """Check if an action_id is known (still pending or already resolved)."""
+        async with self._pending_lock:
+            return action_id in self._pending or action_id in self._resolved_action_ids
+
+    async def poll_action_result(self, action_id: str) -> dict | None:
+        """Non-blocking: check if a result is available. Returns None if still running.
+
+        The future stays in _pending so subsequent polls still return the result.
+        Cleanup happens via wait_for_agent_action_result or _format_pending_actions.
+        """
+        async with self._pending_lock:
+            future = self._pending.get(action_id)
+        if future is None:
+            return None
+        if future.done():
+            try:
+                return future.result()
+            except Exception as e:
+                return {"status": "error", "error": str(e)}
+        return None
+
+    async def cancel_action(self, agent_id: str, action_id: str | None = None) -> None:
+        """Send a cancel/interrupt message for the agent's running action.
+
+        Also resolves the pending future for the cancelled action so that
+        subsequent poll_action_result calls return "cancelled" instead of None.
+        """
+        payload: dict[str, Any] = {"agent_id": agent_id}
+        if action_id:
+            payload["action_id"] = action_id
+        self._enqueue("agent.action.cancel", payload)
+
+        # Resolve the pending future immediately so polls don't show stale "running"
+        if action_id:
+            async with self._pending_lock:
+                future = self._pending.pop(action_id, None)
+                self._resolved_action_ids.add(action_id)
+            if future is not None and not future.done():
+                future.set_result({"status": "cancelled", "action_id": action_id})
 
     async def unregister_agent(self, agent_id: str) -> None:
         """Unregister / despawn an NPC agent."""
         self._enqueue("agent.unregister", {"agent_id": agent_id})
+
+    async def receive_instruction(self, timeout: float = 0.1) -> str | None:
+        """Receive the next pending player.chat instruction (non-blocking)."""
+        try:
+            return await asyncio.wait_for(self._instructions_queue.get(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
 
     async def receive_agent_observation(self, timeout: float = 1.0) -> AgentObservation | None:
         """Receive the next agent.observation message."""

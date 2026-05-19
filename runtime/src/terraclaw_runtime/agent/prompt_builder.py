@@ -45,6 +45,10 @@ class PromptBuilder:
         memory_context: str = "",
         plan_context: str = "",
         action_results: str = "",
+        pending_context: str = "",
+        completed_context: str = "",
+        instructions: str = "",
+        resolved_context: str = "",
     ) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []
 
@@ -54,6 +58,15 @@ class PromptBuilder:
             messages.append({"role": "user", "content": f"[Current Plan]\n{plan_context}"})
         if action_results:
             messages.append({"role": "user", "content": f"[Action Results]\n{action_results}"})
+        if pending_context:
+            messages.append({"role": "user", "content": f"[Pending Actions]\n{pending_context}"})
+        if completed_context:
+            messages.append({"role": "user", "content": f"[Completed Actions]\n{completed_context}"})
+        if resolved_context:
+            messages.append({"role": "user", "content": f"[Resolved Actions]\n{resolved_context}"}
+)
+        if instructions:
+            messages.append({"role": "user", "content": f"[Player Instructions]\n{instructions}"})
 
         obs_text = self._format_observation(observation)
         messages.append({"role": "user", "content": f"[Current Observation]\n{obs_text}"})
@@ -77,7 +90,6 @@ class PromptBuilder:
             f"Layer: {w.get('depth_layer', '?')} | Weather: {w.get('weather', 'clear')} | Hardmode: {w.get('hardmode', False)}",
             "",
             f"Position: ({a.position.x:.0f}, {a.position.y:.0f}) px | Tile: ({a.tile_position[0]}, {a.tile_position[1]})",
-            f"Velocity: ({a.velocity.x:.1f}, {a.velocity.y:.1f}) | Direction: {a.direction}",
         ]
 
         # Entities

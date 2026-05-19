@@ -13,16 +13,15 @@ return {
         if direction == "right" then dx = 1
         elseif direction == "left" then dx = -1 end
 
-        local results = {}
         for i = 1, steps do
-            local move_result = ctx:send_action("move_to", {
+            local aid = ctx:start_action("move_to", {
                 x = params.start_x + dx * i * step_size,
                 y = params.start_y or 0,
                 speed = 8.0,
                 arrival_radius = 32.0,
             })
-            ctx:wait(200)
-            results[i] = move_result
+            -- Wait for each step to complete before moving to the next
+            ctx:wait_for(aid)
         end
 
         return { success = true, message = "Explored " .. direction, steps = steps }
