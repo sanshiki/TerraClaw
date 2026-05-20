@@ -55,7 +55,6 @@ public class BridgeAgent : TerraClawAgent
 
         if (_currentAction == null)
         {
-            NPC.velocity = Vector2.Zero;
             return;
         }
 

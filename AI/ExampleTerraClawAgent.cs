@@ -1,4 +1,5 @@
 using Microsoft.Xna.Framework;
+using TerraClaw.Util;
 using Terraria;
 using Terraria.ID;
 
@@ -16,6 +17,8 @@ public class ExampleTerraClawAgent : BridgeAgent
     /// <summary>Parameterless constructor for standalone NPC spawn (no bridge).</summary>
     public ExampleTerraClawAgent() : base("", "", "terraclaw") { }
 
+    private const float INERTIA = 20f;
+
     // ── Atomic action implementations ──────────────────────────
 
     protected override AgentActionResult ExecuteMoveTo(PendingAgentAction action, int elapsedTicks)
@@ -30,7 +33,6 @@ public class ExampleTerraClawAgent : BridgeAgent
 
         if (dist <= arrivalRadius)
         {
-            NPC.velocity = Vector2.Zero;
             return AgentActionResult.Done(new
             {
                 position = new { x = NPC.Center.X, y = NPC.Center.Y },
@@ -38,7 +40,14 @@ public class ExampleTerraClawAgent : BridgeAgent
             });
         }
 
-        MoveToward(target, speed);
+
+
+        var dir = target - NPC.Center;
+        
+        NPC.velocity = AIHelper.HomeinToTarget(NPC.Center, NPC.velocity, target, speed, INERTIA);
+
+        NPC.direction = dir.X > 0 ? 1 : -1;
+
         return null;
     }
 
@@ -77,20 +86,56 @@ public class ExampleTerraClawAgent : BridgeAgent
         };
     }
 
+
+    private int bounceBackCnt = 0;
+    private bool bounceBack = false;
+    private AgentActionResult tileBreakingResult = null;
     protected override AgentActionResult ExecuteBreakTile(PendingAgentAction action)
     {
         int tx = (int)action.GetParam("tx", -1.0);
         int ty = (int)action.GetParam("ty", -1.0);
 
+        AgentActionResult result = null;
+
         if (tx < 0 || ty < 0)
             return AgentActionResult.Failed("INVALID_PARAMS", "tx and ty required");
 
-        bool ok = BreakTile(tx, ty);
-        return new AgentActionResult
+        Vector2 dist = new Vector2(tx * 16 + 8, ty * 16 + 8) - NPC.Center;
+        Vector2 dir = dist;
+        if(dir != Vector2.Zero)
+            dir.Normalize();
+        else dir = new Vector2(0, -1);
+
+        if(bounceBack)
         {
-            Success = ok,
-            Data = new { tile_broken = ok, position = new { x = tx, y = ty } },
-        };
+            bounceBackCnt++;
+            if(bounceBackCnt > 30)
+            {
+                bounceBack = false;
+                bounceBackCnt = 0;
+                result = tileBreakingResult;
+                tileBreakingResult = null;
+            }
+        }
+        else
+        {
+            // the closer to the tile, the faster to move
+            NPC.velocity = dir * MathHelper.Clamp(0, 10f, 10f / (dist.Length()+0.01f));
+            if(dist.Length() < 16)
+            {
+                // break the tile and bounce back
+                NPC.velocity = -NPC.velocity * 0.6f;
+                bounceBack = true;
+                bool ok = BreakTile(tx, ty);
+                tileBreakingResult = new AgentActionResult
+                {
+                    Success = ok,
+                    Data = new { tile_broken = ok, position = new { x = tx, y = ty } },
+                };
+            }
+        }
+
+        return result;
     }
 
     protected override AgentActionResult ExecuteBreakWall(PendingAgentAction action)
