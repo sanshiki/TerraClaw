@@ -132,6 +132,9 @@ public class BridgeAgent : TerraClawAgent
             case "teleport":
                 return ExecuteTeleport(action);
 
+            case "talk":
+                return ExecuteTalk(action);
+
             default:
                 return AgentActionResult.Failed("UNKNOWN_ACTION", $"Unknown action type: {action.ActionType}");
         }
@@ -247,6 +250,24 @@ public class BridgeAgent : TerraClawAgent
         return AgentActionResult.Done(new { position = new { x, y } });
     }
 
+    private AgentActionResult ExecuteTalk(PendingAgentAction action)
+    {
+        string text = action.GetStringParam("text", "");
+        if (string.IsNullOrEmpty(text))
+            return AgentActionResult.Failed("INVALID_PARAMS", "text is required");
+
+        if (text.Length > 80)
+            return AgentActionResult.Failed("TEXT_TOO_LONG", $"text exceeds {80} characters ({text.Length})");
+
+        // Print to in-game chat
+        Main.NewText($"<{NPC.FullName}> {text}", 200, 200, 100);
+
+        // Show floating text above the NPC's head
+        CombatText.NewText(NPC.Hitbox, Color.Gold, text);
+
+        return AgentActionResult.Done(new { said = text });
+    }
+
     private void ReportActionResult(PendingAgentAction action, AgentActionResult result)
     {
         Core.BridgeModSystem.Instance?.SendAgentActionResult(
@@ -260,10 +281,16 @@ public class PendingAgentAction
     public string ActionType { get; set; } = "";
     public int TimeoutMs { get; set; } = 30000;
     public Dictionary<string, double> Params { get; set; } = new();
+    public Dictionary<string, string> StringParams { get; set; } = new();
 
     public double GetParam(string name, double defaultValue)
     {
         return Params.TryGetValue(name, out var val) ? val : defaultValue;
+    }
+
+    public string GetStringParam(string name, string defaultValue)
+    {
+        return StringParams.TryGetValue(name, out var val) ? val : defaultValue;
     }
 }
 

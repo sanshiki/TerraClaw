@@ -203,6 +203,8 @@ public class BridgeModSystem : ModSystem
             {
                 if (prop.Value.ValueKind == JsonValueKind.Number)
                     action.Params[prop.Name] = prop.Value.GetDouble();
+                else if (prop.Value.ValueKind == JsonValueKind.String)
+                    action.StringParams[prop.Name] = prop.Value.GetString();
             }
         }
 

@@ -138,6 +138,19 @@ get_action_status:
     required: [action_id]
   bridge_action: get_action_status
 
+talk:
+  description: "Make the NPC say something — prints a chat message and shows floating text above the NPC's head."
+  enabled: true
+  parameters:
+    type: object
+    properties:
+      text:
+        type: string
+        maxLength: 80
+        description: "The text message for the NPC to say (max 80 characters)"
+    required: [text]
+  bridge_action: talk
+
 cancel_action:
   description: "Cancel or interrupt a running action by its action_id."
   enabled: true

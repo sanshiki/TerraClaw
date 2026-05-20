@@ -33,7 +33,7 @@ class ActionRegistry:
         if not self._path.exists():
             return
 
-        with open(self._path) as f:
+        with open(self._path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 
         for name, cfg in data.items():

@@ -153,11 +153,11 @@ class AgentLoop:
 
     async def _handle_llm_response(self, response: LLMResponse, obs: AgentObservation, allow_follow_up: bool = True) -> None:
         logger.debug("llm_response",
-                     text=response.text[:200] if response.text else "",
+                     text=response.text[:600] if response.text else "",
                      tool_calls=[tc.name for tc in response.tool_calls],
                      tokens=response.usage.input_tokens,
                      finish_reason=response.stop_reason,
-                     tool_args=[str(tc.arguments)[:120] for tc in response.tool_calls])
+                     tool_args=[str(tc.arguments)[:400] for tc in response.tool_calls])
 
         content_blocks = []
         if response.text:
