@@ -12,15 +12,17 @@ public class BridgeAgent : TerraClawAgent
 {
     public string AgentId { get; private set; }
     public string ConnectionId { get; private set; }
+    public string AgentName { get; private set; }
 
     private readonly ConcurrentQueue<PendingAgentAction> _actionQueue = new();
     private PendingAgentAction _currentAction;
     private int _currentActionTick;
 
-    public BridgeAgent(string agentId, string connectionId)
+    public BridgeAgent(string agentId, string connectionId, string agentName = "terraclaw")
     {
         AgentId = agentId;
         ConnectionId = connectionId;
+        AgentName = agentName;
     }
 
     public override void Initialize()

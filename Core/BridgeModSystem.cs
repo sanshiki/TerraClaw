@@ -29,7 +29,7 @@ public class BridgeModSystem : ModSystem
     public static Vector2? PendingSpawnPosition { get; set; }
 
     // Pending agent registrations queued from WebSocket thread, processed on main thread
-    private readonly ConcurrentQueue<(BridgeConnection conn, float x, float y)> _pendingRegistrations = new();
+    private readonly ConcurrentQueue<(BridgeConnection conn, float x, float y, string agentName)> _pendingRegistrations = new();
 
     public override void Load()
     {
@@ -65,20 +65,20 @@ public class BridgeModSystem : ModSystem
     {
         while (_pendingRegistrations.TryDequeue(out var entry))
         {
-            DoAgentRegister(entry.conn, entry.x, entry.y);
+            DoAgentRegister(entry.conn, entry.x, entry.y, entry.agentName);
         }
     }
 
-    private void DoAgentRegister(BridgeConnection conn, float x, float y)
+    private void DoAgentRegister(BridgeConnection conn, float x, float y, string agentName = "terraclaw")
     {
         if (_connectionToAgentId.TryGetValue(conn.Id, out var existingId))
             UnregisterAgent(existingId);
 
         var agentId = Guid.NewGuid().ToString();
-        var agent = new BridgeAgent(agentId, conn.Id);
+        var agent = new BridgeAgent(agentId, conn.Id, agentName);
 
         var source = new Terraria.DataStructures.EntitySource_SpawnNPC();
-        int npcIndex = AI.TerraClawAgentNPC.Spawn(new Vector2(x, y), source, agent);
+        int npcIndex = AI.TerraClawAgentNPC.Spawn(new Vector2(x, y), source, agent, agentName);
 
         if (npcIndex < 0)
         {
@@ -144,6 +144,14 @@ public class BridgeModSystem : ModSystem
     public void HandleAgentRegister(BridgeConnection conn, JsonElement payload)
     {
         float x = 0, y = 0;
+        string agentName = "terraclaw";
+
+        if (payload.ValueKind == JsonValueKind.Object)
+        {
+            if (payload.TryGetProperty("agent_name", out var an))
+                agentName = an.GetString() ?? "terraclaw";
+        }
+
         if (payload.ValueKind == JsonValueKind.Object && payload.TryGetProperty("position", out var pos))
         {
             if (pos.TryGetProperty("x", out var px)) x = (float)px.GetDouble();
@@ -162,7 +170,7 @@ public class BridgeModSystem : ModSystem
         }
 
         // Queue registration to run on main thread (NPC.NewNPC must be main thread)
-        _pendingRegistrations.Enqueue((conn, x, y));
+        _pendingRegistrations.Enqueue((conn, x, y, agentName));
     }
 
     public void HandleAgentAction(BridgeConnection conn, JsonElement payload)

@@ -211,9 +211,9 @@ class BridgeClient:
     async def request_observation(self) -> None:
         self._enqueue("observation.request", {})
 
-    async def register_agent(self, position: tuple[float, float] | None = None) -> dict:
+    async def register_agent(self, position: tuple[float, float] | None = None, agent_name: str = "terraclaw") -> dict:
         """Register an NPC agent. Returns the registration response."""
-        payload: dict = {}
+        payload: dict = {"agent_name": agent_name}
         if position:
             payload["position"] = {"x": position[0], "y": position[1]}
         self._enqueue("agent.register", payload)

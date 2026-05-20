@@ -62,13 +62,15 @@ public class TerraClawAgentNPC : ModNPC
     /// Spawn an agent NPC at the given world coordinates.
     /// Returns the NPC whoAmI, or -1 on failure.
     /// </summary>
-    public static int Spawn(Vector2 worldPos, Terraria.DataStructures.IEntitySource source, TerraClawAgent? agent = null)
+    public static int Spawn(Vector2 worldPos, Terraria.DataStructures.IEntitySource source, TerraClawAgent? agent = null, string agentName = "")
     {
         int index = NPC.NewNPC(source, (int)worldPos.X, (int)worldPos.Y,
             ModContent.NPCType<TerraClawAgentNPC>());
         if (index >= 0 && index < Main.maxNPCs)
         {
             var npc = Main.npc[index];
+            if (!string.IsNullOrEmpty(agentName))
+                npc.GivenName = agentName;
             if (npc.ModNPC is TerraClawAgentNPC agentNpc && agent != null)
             {
                 agentNpc.Agent = agent;
