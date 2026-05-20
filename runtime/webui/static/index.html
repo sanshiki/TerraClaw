@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TerraClaw Agent WebUI</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app">
+  <!-- ── Connection Bar ──────────────────────────────── -->
+  <header id="conn-bar">
+    <span id="conn-status" class="status-dot disconnected"></span>
+    <span id="conn-text">Disconnected</span>
+    <span class="sep">|</span>
+    <span>Agent: <strong id="agent-id">—</strong></span>
+    <span class="sep">|</span>
+    <span>Tick: <strong id="tick-display">—</strong></span>
+    <span class="sep">|</span>
+    <span>Tools: <strong id="tool-count">—</strong></span>
+    <span class="sep">|</span>
+    <span id="obs-count">Obs: 0</span>
+  </header>
+
+  <div id="main-grid">
+    <!-- ── Left Column ────────────────────────────────── -->
+    <div id="left-col">
+
+      <!-- Observation Panel -->
+      <section id="obs-panel" class="panel">
+        <h2 class="panel-title">Observation</h2>
+        <div id="obs-content">
+          <div class="obs-row"><span class="label">Position</span><span id="obs-pos" class="value">—</span></div>
+          <div class="obs-row"><span class="label">Tile</span><span id="obs-tile" class="value">—</span></div>
+          <div class="obs-row"><span class="label">Layer</span><span id="obs-layer" class="value">—</span></div>
+          <div class="obs-row"><span class="label">Time</span><span id="obs-time" class="value">—</span></div>
+          <div class="obs-row"><span class="label">Weather</span><span id="obs-weather" class="value">—</span></div>
+          <div class="obs-row"><span class="label">Hardmode</span><span id="obs-hardmode" class="value">—</span></div>
+
+          <div id="obs-entities" class="obs-section">
+            <h3>Entities</h3>
+            <div id="obs-npcs"><em>No NPCs</em></div>
+            <div id="obs-items"><em>No items</em></div>
+            <div id="obs-projectiles"><em>No projectiles</em></div>
+          </div>
+
+          <div id="obs-tiles" class="obs-section">
+            <h3>Notable Tiles</h3>
+            <div id="obs-tile-list"><em>None</em></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Pending Actions Panel -->
+      <section id="pending-panel" class="panel">
+        <h2 class="panel-title">Pending Actions</h2>
+        <div id="pending-list"><em>None</em></div>
+      </section>
+
+      <!-- Player Instructions Panel -->
+      <section id="instr-panel" class="panel">
+        <h2 class="panel-title">Player Instructions</h2>
+        <div id="instr-input-row">
+          <input type="text" id="instr-input" placeholder="Type instructions for the agent...">
+          <button id="instr-send-btn">Send</button>
+        </div>
+        <div id="instr-list"><em>No instructions</em></div>
+      </section>
+    </div>
+
+    <!-- ── Right Column ───────────────────────────────── -->
+    <div id="right-col">
+
+      <!-- Tool Console -->
+      <section id="tool-console" class="panel">
+        <h2 class="panel-title">Tool Console <span class="subtitle">— assemble the LLM response</span></h2>
+
+        <div class="console-section">
+          <label for="response-text">Text Response</label>
+          <textarea id="response-text" rows="3" placeholder="What would the LLM say? (optional)"></textarea>
+        </div>
+
+        <div class="console-section">
+          <div class="toolbar-row">
+            <label>Tool Calls</label>
+            <div class="toolbar-btns">
+              <select id="tool-selector"><option value="">— Select tool —</option></select>
+              <button id="add-tool-btn" disabled>+ Add Tool</button>
+            </div>
+          </div>
+          <div id="tool-call-list">
+            <em>No tools added yet. Select a tool above and click "+ Add Tool".</em>
+          </div>
+        </div>
+
+        <div class="console-actions">
+          <button id="submit-btn" class="btn-primary">Submit Response</button>
+          <button id="clear-tools-btn">Clear All Tools</button>
+        </div>
+      </section>
+
+      <!-- Action History -->
+      <section id="history-panel" class="panel">
+        <h2 class="panel-title">Action History</h2>
+        <div id="history-list"><em>No actions yet</em></div>
+      </section>
+
+      <!-- Context Preview (collapsible) -->
+      <section id="context-panel" class="panel collapsible">
+        <h2 class="panel-title collapsible-header" id="context-toggle">
+          <span class="collapse-icon">▶</span> Context Preview <span class="subtitle">— what the LLM would see</span>
+        </h2>
+        <div id="context-body" class="collapsible-body" style="display:none;">
+          <pre id="context-content" class="pre-block"><em>Not available</em></pre>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

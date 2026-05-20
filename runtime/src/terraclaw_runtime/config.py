@@ -98,6 +98,7 @@ class RuntimeConfig:
     log_file: str = ""
     log_level: str = "INFO"
     verbose: bool = False
+    human_mode: bool = False  # Run with human-in-the-loop web UI instead of LLM
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> RuntimeConfig:

@@ -40,7 +40,7 @@ class BridgeClient:
         self._last_send_time = 0.0
         self._pending: dict[str, asyncio.Future] = {}
         self._pending_lock: asyncio.Lock = asyncio.Lock()
-        self._resolved_action_ids: set[str] = set()  # action_ids whose futures have completed
+        self._resolved_results: dict[str, dict] = {}  # action_id → cached result for completed actions
         self._instructions_queue: asyncio.Queue[str] = asyncio.Queue()
 
     @property
@@ -143,7 +143,7 @@ class BridgeClient:
                             if future is not None and not future.done():
                                 future.set_result(msg.payload)
                                 self._pending.pop(action_id, None)
-                                self._resolved_action_ids.add(action_id)
+                                self._resolved_results[action_id] = msg.payload
                                 continue
 
                 # Route player.chat instructions to the instructions queue
@@ -260,11 +260,15 @@ class BridgeClient:
         async with self._pending_lock:
             future = self._pending.get(action_id)
         if future is None:
+            async with self._pending_lock:
+                result = self._resolved_results.get(action_id)
+            if result:
+                return result
             return {"status": "unknown", "action_id": action_id}
         try:
             result = await asyncio.wait_for(future, timeout=timeout)
             async with self._pending_lock:
-                self._resolved_action_ids.add(action_id)
+                self._resolved_results[action_id] = result
             return result
         except asyncio.TimeoutError:
             return {"status": "timeout", "action_id": action_id, "error": "Timed out waiting for agent action result"}
@@ -275,24 +279,26 @@ class BridgeClient:
     async def has_pending_action(self, action_id: str) -> bool:
         """Check if an action_id is known (still pending or already resolved)."""
         async with self._pending_lock:
-            return action_id in self._pending or action_id in self._resolved_action_ids
+            return action_id in self._pending or action_id in self._resolved_results
 
     async def poll_action_result(self, action_id: str) -> dict | None:
         """Non-blocking: check if a result is available. Returns None if still running.
 
-        The future stays in _pending so subsequent polls still return the result.
-        Cleanup happens via wait_for_agent_action_result or _format_pending_actions.
+        Checks both pending futures and the resolved-results cache so that
+        completed or cancelled actions always return their result on subsequent polls.
         """
         async with self._pending_lock:
             future = self._pending.get(action_id)
-        if future is None:
-            return None
-        if future.done():
-            try:
-                return future.result()
-            except Exception as e:
-                return {"status": "error", "error": str(e)}
-        return None
+            if future is not None:
+                if future.done():
+                    try:
+                        return future.result()
+                    except Exception as e:
+                        return {"status": "error", "error": str(e)}
+                return None
+            # Check resolved cache — action completed and future was cleaned up
+            result = self._resolved_results.get(action_id)
+            return result
 
     async def cancel_action(self, agent_id: str, action_id: str | None = None) -> None:
         """Send a cancel/interrupt message for the agent's running action.
@@ -309,7 +315,7 @@ class BridgeClient:
         if action_id:
             async with self._pending_lock:
                 future = self._pending.pop(action_id, None)
-                self._resolved_action_ids.add(action_id)
+                self._resolved_results[action_id] = {"status": "cancelled", "action_id": action_id}
             if future is not None and not future.done():
                 future.set_result({"status": "cancelled", "action_id": action_id})
 
