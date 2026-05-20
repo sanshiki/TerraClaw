@@ -61,13 +61,13 @@ class TerraClawRuntime:
             logger.info("agent_registered", agent_id=self._agent_id, entity_index=result.get("entity_index"))
 
             # Build action registry and tool registry
-            actions = ActionRegistry(self._config.actions_path)
+            actions = ActionRegistry(self._config.get_actions_path())
             actions.load()
             self._tools = ToolRegistry(actions, self._bridge, self._agent_id)
 
-            # Build skill registry (loads Lua skills from config/skills/)
+            # Build skill registry (loads Lua skills from agent's skill dir)
             self._skills = SkillRegistry(self._bridge)
-            loaded = self._skills.load_from_directory(self._config.skill.skill_definitions_path)
+            loaded = self._skills.load_from_directory(self._config.get_skills_dir())
             if loaded:
                 logger.info("lua_skills_loaded", count=loaded)
 
@@ -81,7 +81,8 @@ class TerraClawRuntime:
                     agent_id=self._agent_id,
                     llm_call_interval_s=self._config.llm_call_interval_s,
                     tick_rate_hz=self._config.tick_rate_hz,
-                    prompts_path=self._config.prompt.prompts_path,
+                    system_prompt_path=self._config.get_system_prompt_path(),
+                    identity_path=self._config.get_identity_path(),
                     max_history_messages=self._config.prompt.max_history_messages,
                 )
                 await self._agent.run()
@@ -107,7 +108,8 @@ class TerraClawRuntime:
         from terraclaw_runtime.agent.prompt_builder import PromptBuilder
 
         prompt_builder = PromptBuilder(
-            prompts_path=self._config.prompt.prompts_path,
+            system_prompt_path=self._config.get_system_prompt_path(),
+            identity_path=self._config.get_identity_path(),
         )
 
         app = create_webui_app(

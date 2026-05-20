@@ -27,7 +27,6 @@ memory:
 skill:
   default_timeout_s: 120.0
   max_concurrent_skills: 1
-  skill_definitions_path: "config/skills"
 
 recovery:
   stuck_movement_threshold_px: 30.0
@@ -57,5 +56,6 @@ replay:
 # Runtime settings
 tick_rate_hz: 10.0
 llm_call_interval_s: 5.0
+agent: "terraclaw"
 log_level: "INFO"
 verbose: true   # Set true for detailed debug output

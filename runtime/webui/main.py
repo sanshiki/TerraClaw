@@ -25,7 +25,7 @@ from terraclaw_runtime.bridge.client import BridgeClient
 from terraclaw_runtime.agent.action_registry import ActionRegistry
 from terraclaw_runtime.agent.tool_registry import ToolRegistry
 from terraclaw_runtime.agent.prompt_builder import PromptBuilder
-from terraclaw_runtime.config import BridgeConfig
+from terraclaw_runtime.config import RuntimeConfig
 
 from webui import create_webui_app
 
@@ -92,7 +92,10 @@ def main():
     logger = structlog.get_logger()
 
     async def startup():
-        cfg = BridgeConfig(url="ws://127.0.0.1:9777/bridge")
+        runtime_config = RuntimeConfig.from_yaml(CONFIG_DIR / "config.yaml")
+        runtime_config.apply_env_overrides()
+
+        cfg = runtime_config.bridge
         bridge = BridgeClient(cfg)
 
         logger.info("webui_standalone_starting")
@@ -102,12 +105,12 @@ def main():
         agent_id = bridge.agent_id or result.get("agent_id", "?")
         logger.info("webui_agent_registered", agent_id=agent_id[:12])
 
-        actions_yaml = CONFIG_DIR / "actions.yaml"
-        action_registry = ActionRegistry(str(actions_yaml))
+        action_registry = ActionRegistry(runtime_config.get_actions_path())
         action_registry.load()
         tool_registry = ToolRegistry(action_registry, bridge, agent_id)
         prompt_builder = PromptBuilder(
-            prompts_path=str(CONFIG_DIR / "prompts"),
+            system_prompt_path=runtime_config.get_system_prompt_path(),
+            identity_path=runtime_config.get_identity_path(),
         )
 
         app = create_webui_app(bridge, tool_registry, prompt_builder, agent_id)

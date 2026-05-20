@@ -41,14 +41,18 @@ class AgentLoop:
         agent_id: str,
         llm_call_interval_s: float = 5.0,
         tick_rate_hz: float = 10.0,
-        prompts_path: str = "config/prompts",
+        system_prompt_path: str = "config/system.md",
+        identity_path: str | None = None,
         max_history_messages: int = 10,
     ):
         self._bridge = bridge
         self._llm = llm
         self._tools = tools
         self._agent_id = agent_id
-        self._prompt_builder = PromptBuilder(prompts_path=prompts_path)
+        self._prompt_builder = PromptBuilder(
+            system_prompt_path=system_prompt_path,
+            identity_path=identity_path,
+        )
         self._llm_call_interval_s = llm_call_interval_s
         self._tick_rate_hz = tick_rate_hz
         self._max_history_messages = max_history_messages

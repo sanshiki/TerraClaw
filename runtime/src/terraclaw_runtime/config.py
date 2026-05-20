@@ -42,7 +42,6 @@ class MemoryConfig:
 class SkillConfig:
     default_timeout_s: float = 120.0
     max_concurrent_skills: int = 1
-    skill_definitions_path: str = "config/skills"
 
 
 @dataclass
@@ -78,7 +77,6 @@ class ReplayConfig:
 
 @dataclass
 class PromptConfig:
-    prompts_path: str = "config/prompts"
     max_history_messages: int = 10
 
 
@@ -94,11 +92,12 @@ class RuntimeConfig:
     prompt: PromptConfig = field(default_factory=PromptConfig)
     tick_rate_hz: float = 10.0
     llm_call_interval_s: float = 5.0
-    actions_path: str = "config/actions.yaml"
+    agent_name: str = "terraclaw"
     log_file: str = ""
     log_level: str = "INFO"
     verbose: bool = False
     human_mode: bool = False  # Run with human-in-the-loop web UI instead of LLM
+    _config_dir: Path | None = None  # Set by from_yaml() — parent dir of config.yaml
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> RuntimeConfig:
@@ -109,22 +108,30 @@ class RuntimeConfig:
         with open(path) as f:
             data = yaml.safe_load(f) or {}
 
-        return cls(
+        # Pop deprecated path fields so accidental old config doesn't crash
+        prompt_data = data.get("prompt", {}).copy()
+        prompt_data.pop("prompts_path", None)
+        skill_data = data.get("skill", {}).copy()
+        skill_data.pop("skill_definitions_path", None)
+
+        config = cls(
             bridge=BridgeConfig(**data.get("bridge", {})),
             llm=LLMConfig(**data.get("llm", {})),
             memory=MemoryConfig(**data.get("memory", {})),
-            skill=SkillConfig(**data.get("skill", {})),
+            skill=SkillConfig(**skill_data),
             recovery=RecoveryConfig(**data.get("recovery", {})),
             sandbox=SandboxConfig(**data.get("sandbox", {})),
             replay=ReplayConfig(**data.get("replay", {})),
-            prompt=PromptConfig(**data.get("prompt", {})),
+            prompt=PromptConfig(**prompt_data),
             tick_rate_hz=data.get("tick_rate_hz", 10.0),
             llm_call_interval_s=data.get("llm_call_interval_s", 5.0),
-            actions_path=data.get("actions_path", "config/actions.yaml"),
+            agent_name=data.get("agent", "terraclaw"),
             log_file=data.get("log_file", ""),
             log_level=data.get("log_level", "INFO"),
             verbose=data.get("verbose", False),
         )
+        config._config_dir = path.parent.resolve()
+        return config
 
     def apply_env_overrides(self) -> None:
         """Override fields from environment variables (mutates in place)."""
@@ -149,6 +156,22 @@ class RuntimeConfig:
             self.llm.model = os.environ["LLM_MODEL"]
         if os.getenv("LOG_LEVEL"):
             self.log_level = os.environ["LOG_LEVEL"]
+
+    def get_system_prompt_path(self) -> str:
+        """Resolve path to the shared system prompt."""
+        return str(self._config_dir / "system.md")
+
+    def get_identity_path(self) -> str:
+        """Resolve path to the active agent's identity file."""
+        return str(self._config_dir.parent / "agents" / self.agent_name / "identity.md")
+
+    def get_actions_path(self) -> str:
+        """Resolve path to the active agent's action definitions."""
+        return str(self._config_dir.parent / "agents" / self.agent_name / "actions.yaml")
+
+    def get_skills_dir(self) -> str:
+        """Resolve path to the active agent's Lua skills directory."""
+        return str(self._config_dir.parent / "agents" / self.agent_name / "skill")
 
     @classmethod
     def from_env(cls) -> RuntimeConfig:

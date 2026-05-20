@@ -20,18 +20,29 @@ class PromptBuilder:
     Loads the system prompt from a markdown file on first access.
     """
 
-    def __init__(self, prompts_path: str = "config/prompts", max_context_tokens: int = 8000):
-        self._prompts_path = Path(prompts_path)
+    def __init__(
+        self,
+        system_prompt_path: str = "config/system.md",
+        identity_path: str | None = None,
+        max_context_tokens: int = 8000,
+    ):
+        self._system_prompt_path = Path(system_prompt_path)
+        self._identity_path = Path(identity_path) if identity_path else None
         self._max_tokens = max_context_tokens
         self._system_prompt: str | None = None
 
     def get_system_prompt(self, variables: dict[str, str] | None = None) -> str:
         """Return the system prompt, loading from markdown on first call.
 
+        Appends the agent identity file (identity.md) if one was configured.
         Supports {variable} substitution in the prompt text.
         """
         if self._system_prompt is None:
-            self._system_prompt = self._load_prompt("system.md")
+            base = self._load_prompt(self._system_prompt_path)
+            if self._identity_path and self._identity_path.exists():
+                identity = self._identity_path.read_text(encoding="utf-8").strip()
+                base = base + "\n\n" + identity
+            self._system_prompt = base
 
         prompt = self._system_prompt
         if variables:
@@ -73,9 +84,8 @@ class PromptBuilder:
 
         return messages
 
-    def _load_prompt(self, name: str) -> str:
+    def _load_prompt(self, path: Path) -> str:
         """Load a prompt from a markdown file, falling back to embedded default."""
-        path = self._prompts_path / name
         if path.exists():
             return path.read_text(encoding="utf-8").strip()
         return _FALLBACK_SYSTEM_PROMPT
