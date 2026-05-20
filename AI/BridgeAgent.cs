@@ -37,6 +37,9 @@ public class BridgeAgent : TerraClawAgent
         NPC.chaseable = true;
     }
 
+    /// <summary>True when the agent has a bridge action queued or in progress.</summary>
+    protected bool IsActionPending => _currentAction != null || !_actionQueue.IsEmpty;
+
     public override void AI()
     {
         if (!IsActive) return;
@@ -142,133 +145,29 @@ public class BridgeAgent : TerraClawAgent
         }
     }
 
-    private AgentActionResult ExecuteMoveTo(PendingAgentAction action, int elapsedTicks)
-    {
-        float x = (float)action.GetParam("x", 0.0);
-        float y = (float)action.GetParam("y", 0.0);
-        float speed = (float)action.GetParam("speed", 4.0);
-        float arrivalRadius = (float)action.GetParam("arrival_radius", 16.0);
+    protected virtual AgentActionResult ExecuteMoveTo(PendingAgentAction action, int elapsedTicks)
+        => AgentActionResult.Failed("NOT_IMPLEMENTED", "ExecuteMoveTo not implemented");
 
-        var target = new Vector2(x, y);
-        float dist = Vector2.Distance(NPC.Center, target);
+    protected virtual AgentActionResult ExecutePlaceTile(PendingAgentAction action)
+        => AgentActionResult.Failed("NOT_IMPLEMENTED", "ExecutePlaceTile not implemented");
 
-        if (dist <= arrivalRadius)
-        {
-            NPC.velocity = Vector2.Zero;
-            return AgentActionResult.Done(new
-            {
-                position = new { x = NPC.Center.X, y = NPC.Center.Y },
-                distance_remaining = dist,
-            });
-        }
+    protected virtual AgentActionResult ExecutePlaceWall(PendingAgentAction action)
+        => AgentActionResult.Failed("NOT_IMPLEMENTED", "ExecutePlaceWall not implemented");
 
-        MoveToward(target, speed);
-        return null; // still running
-    }
+    protected virtual AgentActionResult ExecuteBreakTile(PendingAgentAction action)
+        => AgentActionResult.Failed("NOT_IMPLEMENTED", "ExecuteBreakTile not implemented");
 
-    private AgentActionResult ExecutePlaceTile(PendingAgentAction action)
-    {
-        int tx = (int)action.GetParam("tx", -1.0);
-        int ty = (int)action.GetParam("ty", -1.0);
-        int tileType = (int)action.GetParam("tile_type", (double)TileID.Dirt);
-        int style = (int)action.GetParam("style", 0.0);
+    protected virtual AgentActionResult ExecuteBreakWall(PendingAgentAction action)
+        => AgentActionResult.Failed("NOT_IMPLEMENTED", "ExecuteBreakWall not implemented");
 
-        if (tx < 0 || ty < 0)
-            return AgentActionResult.Failed("INVALID_PARAMS", "tx and ty required");
+    protected virtual AgentActionResult ExecuteWait(PendingAgentAction action, int elapsedTicks)
+        => AgentActionResult.Failed("NOT_IMPLEMENTED", "ExecuteWait not implemented");
 
-        bool ok = PlaceTile(tx, ty, tileType, style);
-        return new AgentActionResult
-        {
-            Success = ok,
-            Data = new { tile_placed = ok, position = new { x = tx, y = ty }, tile_type = tileType },
-        };
-    }
+    protected virtual AgentActionResult ExecuteTeleport(PendingAgentAction action)
+        => AgentActionResult.Failed("NOT_IMPLEMENTED", "ExecuteTeleport not implemented");
 
-    private AgentActionResult ExecutePlaceWall(PendingAgentAction action)
-    {
-        int tx = (int)action.GetParam("tx", -1.0);
-        int ty = (int)action.GetParam("ty", -1.0);
-        int wallType = (int)action.GetParam("wall_type", (double)WallID.Glass);
-
-        if (tx < 0 || ty < 0)
-            return AgentActionResult.Failed("INVALID_PARAMS", "tx and ty required");
-
-        bool ok = PlaceWall(tx, ty, wallType);
-        return new AgentActionResult
-        {
-            Success = ok,
-            Data = new { wall_placed = ok, position = new { x = tx, y = ty }, wall_type = wallType },
-        };
-    }
-
-    private AgentActionResult ExecuteBreakTile(PendingAgentAction action)
-    {
-        int tx = (int)action.GetParam("tx", -1.0);
-        int ty = (int)action.GetParam("ty", -1.0);
-
-        if (tx < 0 || ty < 0)
-            return AgentActionResult.Failed("INVALID_PARAMS", "tx and ty required");
-
-        bool ok = BreakTile(tx, ty);
-        return new AgentActionResult
-        {
-            Success = ok,
-            Data = new { tile_broken = ok, position = new { x = tx, y = ty } },
-        };
-    }
-
-    private AgentActionResult ExecuteBreakWall(PendingAgentAction action)
-    {
-        int tx = (int)action.GetParam("tx", -1.0);
-        int ty = (int)action.GetParam("ty", -1.0);
-
-        if (tx < 0 || ty < 0)
-            return AgentActionResult.Failed("INVALID_PARAMS", "tx and ty required");
-
-        bool ok = BreakWall(tx, ty);
-        return new AgentActionResult
-        {
-            Success = ok,
-            Data = new { wall_broken = ok, position = new { x = tx, y = ty } },
-        };
-    }
-
-    private AgentActionResult ExecuteWait(PendingAgentAction action, int elapsedTicks)
-    {
-        int durationMs = (int)action.GetParam("duration_ms", 1000.0);
-        int elapsedMs = (int)(elapsedTicks * (1000.0 / 60.0));
-
-        if (elapsedMs >= durationMs)
-            return AgentActionResult.Done(new { waited_ms = elapsedMs });
-
-        return null; // still waiting
-    }
-
-    private AgentActionResult ExecuteTeleport(PendingAgentAction action)
-    {
-        float x = (float)action.GetParam("x", 0.0);
-        float y = (float)action.GetParam("y", 0.0);
-        Teleport(new Vector2(x, y));
-        return AgentActionResult.Done(new { position = new { x, y } });
-    }
-
-    private AgentActionResult ExecuteTalk(PendingAgentAction action)
-    {
-        string text = action.GetStringParam("text", "");
-        if (string.IsNullOrEmpty(text))
-            return AgentActionResult.Failed("INVALID_PARAMS", "text is required");
-
-        if (text.Length > 80)
-            return AgentActionResult.Failed("TEXT_TOO_LONG", $"text exceeds {80} characters ({text.Length})");
-
-        // Print to in-game chat
-        Main.NewText($"<{NPC.FullName}> {text}", 200, 200, 100);
-
-        // Show floating text above the NPC's head
-        CombatText.NewText(NPC.Hitbox, Color.Gold, text);
-
-        return AgentActionResult.Done(new { said = text });
-    }
+    protected virtual AgentActionResult ExecuteTalk(PendingAgentAction action)
+        => AgentActionResult.Failed("NOT_IMPLEMENTED", "ExecuteTalk not implemented");
 
     private void ReportActionResult(PendingAgentAction action, AgentActionResult result)
     {

@@ -75,7 +75,7 @@ public class BridgeModSystem : ModSystem
             UnregisterAgent(existingId);
 
         var agentId = Guid.NewGuid().ToString();
-        var agent = new BridgeAgent(agentId, conn.Id, agentName);
+        var agent = CreateAgent(agentId, conn.Id, agentName);
 
         var source = new Terraria.DataStructures.EntitySource_SpawnNPC();
         int npcIndex = AI.TerraClawAgentNPC.Spawn(new Vector2(x, y), source, agent, agentName);
@@ -98,6 +98,15 @@ public class BridgeModSystem : ModSystem
             position = new { x = npc.Center.X, y = npc.Center.Y },
         }, sessionId: conn.Id);
         conn.OutgoingQueue.Enqueue(response);
+    }
+
+    private static BridgeAgent CreateAgent(string agentId, string connectionId, string agentName)
+    {
+        return agentName switch
+        {
+            "terraclaw" => new ExampleTerraClawAgent(agentId, connectionId, agentName),
+            _ => new BridgeAgent(agentId, connectionId, agentName),
+        };
     }
 
     public override void Unload()

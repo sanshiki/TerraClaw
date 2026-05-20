@@ -101,23 +101,58 @@ Contains Lua scripts for multi-step skills. Loaded by `SkillRegistry` at startup
 
 2. **Edit `agents/my-custom-agent/identity.md`** — change the personality, rules, and behavior description.
 
-3. **Edit `agents/my-custom-agent/actions.yaml`** — add/remove actions as needed. Each action added here must also have a corresponding `case` in `AI/BridgeAgent.cs`.
+3. **Edit `agents/my-custom-agent/actions.yaml`** — add/remove action tool definitions as needed.
 
 4. **(Optional) Add Lua skills** — place `.lua` files in `agents/my-custom-agent/skill/`.
 
-5. **Set the agent in config** — edit `config/config.yaml`:
+5. **Create a C# subclass** if your agent needs different action behavior from `BridgeAgent`:
+   ```csharp
+   // AI/MyCustomAgent.cs
+   namespace TerraClaw.AI;
+
+   public class MyCustomAgent : BridgeAgent
+   {
+       public MyCustomAgent(string agentId, string connectionId, string agentName = "my-custom-agent")
+           : base(agentId, connectionId, agentName) { }
+
+       // Override only the actions that differ
+       protected override AgentActionResult ExecuteMoveTo(PendingAgentAction action, int elapsedTicks)
+       {
+           // custom movement logic
+       }
+   }
+   ```
+   If your agent uses exactly the same action implementations as `BridgeAgent`, skip this step.
+
+6. **Register your agent in the factory** in `Core/BridgeModSystem.cs`:
+   ```csharp
+   private static BridgeAgent CreateAgent(string agentId, string connectionId, string agentName)
+   {
+       return agentName switch
+       {
+           "my-custom-agent" => new MyCustomAgent(agentId, connectionId, agentName),
+           _ => new BridgeAgent(agentId, connectionId, agentName),
+       };
+   }
+   ```
+
+7. **Set the agent in config** — edit `config/config.yaml`:
    ```yaml
    agent: "my-custom-agent"
    ```
 
-6. **Restart the runtime**. The orchestrator loads actions, identity, and skills from `agents/my-custom-agent/`.
+8. **Restart the runtime**. The orchestrator loads actions, identity, and skills from `agents/my-custom-agent/`.
 
-## C# Side: Adding New Actions
+## C# Side: Custom Action Implementations
 
-Actions in `actions.yaml` need a handler in `AI/BridgeAgent.cs`:
+All `Execute*` methods in `BridgeAgent` are `protected virtual`, so you can create a subclass that overrides specific actions.
+
+### Adding a New Action to All Agents
+
+Add the handler in `AI/BridgeAgent.cs`:
 
 ```csharp
-private AgentActionResult ExecuteMyAction(PendingAgentAction action)
+protected virtual AgentActionResult ExecuteMyAction(PendingAgentAction action)
 {
     int param = (int)action.GetParam("param_name", 0.0);
     // ... implement logic ...
@@ -129,6 +164,39 @@ Then add a `case` in the `ExecuteAction` switch:
 ```csharp
 case "my_action":
     return ExecuteMyAction(action);
+```
+
+### Overriding an Action for a Specific Agent
+
+Create a subclass in `AI/`:
+
+```csharp
+namespace TerraClaw.AI;
+
+public class GroundPounderBridgeAgent : BridgeAgent
+{
+    public GroundPounderBridgeAgent(string agentId, string connectionId, string agentName = "ground-pounder")
+        : base(agentId, connectionId, agentName) { }
+
+    protected override AgentActionResult ExecuteMoveTo(PendingAgentAction action, int elapsedTicks)
+    {
+        // Ground-based movement instead of flying
+        // ...
+    }
+}
+```
+
+Then register it in the factory in `Core/BridgeModSystem.cs`:
+
+```csharp
+private static BridgeAgent CreateAgent(string agentId, string connectionId, string agentName)
+{
+    return agentName switch
+    {
+        "ground-pounder" => new GroundPounderBridgeAgent(agentId, connectionId, agentName),
+        _ => new BridgeAgent(agentId, connectionId, agentName),
+    };
+}
 ```
 
 ## How It All Connects

@@ -1,4 +1,3 @@
-using System;
 using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.ID;
@@ -6,110 +5,141 @@ using Terraria.ID;
 namespace TerraClaw.AI;
 
 /// <summary>
-/// Example agent that floats through walls without collision.
-/// Demonstrates basic movement, tile placement, and tile breaking.
+/// Example BridgeAgent subclass — demonstrates how to override atomic action implementations.
+/// This is the default agent used for "terraclaw" in the factory.
 /// </summary>
-public class ExampleTerraClawAgent : TerraClawAgent
+public class ExampleTerraClawAgent : BridgeAgent
 {
-    private Vector2 _target;
-    private int _actionTimer;
-    private int _retargetTimer;
-    private const float MoveSpeed = 4f;
+    public ExampleTerraClawAgent(string agentId, string connectionId, string agentName = "terraclaw")
+        : base(agentId, connectionId, agentName) { }
 
-    public override void Initialize()
+    /// <summary>Parameterless constructor for standalone NPC spawn (no bridge).</summary>
+    public ExampleTerraClawAgent() : base("", "", "terraclaw") { }
+
+    // ── Atomic action implementations ──────────────────────────
+
+    protected override AgentActionResult ExecuteMoveTo(PendingAgentAction action, int elapsedTicks)
     {
-        // No-clip: ignore tiles and gravity
-        NPC.noTileCollide = true;
-        NPC.noGravity = true;
-        NPC.damage = 0;
-        NPC.friendly = true;
-        NPC.life = 9999;
-        NPC.lifeMax = 9999;
+        float x = (float)action.GetParam("x", 0.0);
+        float y = (float)action.GetParam("y", 0.0);
+        float speed = (float)action.GetParam("speed", 4.0);
+        float arrivalRadius = (float)action.GetParam("arrival_radius", 16.0);
 
-        PickNewTarget();
+        var target = new Vector2(x, y);
+        float dist = Vector2.Distance(NPC.Center, target);
+
+        if (dist <= arrivalRadius)
+        {
+            NPC.velocity = Vector2.Zero;
+            return AgentActionResult.Done(new
+            {
+                position = new { x = NPC.Center.X, y = NPC.Center.Y },
+                distance_remaining = dist,
+            });
+        }
+
+        MoveToward(target, speed);
+        return null;
     }
 
-    public override void AI()
+    protected override AgentActionResult ExecutePlaceTile(PendingAgentAction action)
     {
-        if (!IsActive) return;
+        int tx = (int)action.GetParam("tx", -1.0);
+        int ty = (int)action.GetParam("ty", -1.0);
+        int tileType = (int)action.GetParam("tile_type", (double)TileID.Dirt);
+        int style = (int)action.GetParam("style", 0.0);
 
-        _actionTimer++;
-        _retargetTimer++;
+        if (tx < 0 || ty < 0)
+            return AgentActionResult.Failed("INVALID_PARAMS", "tx and ty required");
 
-        // Move toward target
-        MoveToward(_target, MoveSpeed);
-
-        // Periodically interact with the world
-        if (_actionTimer >= 30) // every 0.5s
+        bool ok = PlaceTile(tx, ty, tileType, style);
+        return new AgentActionResult
         {
-            _actionTimer = 0;
-            PerformWorldInteraction();
-        }
-
-        // Pick a new target every few seconds
-        if (_retargetTimer >= 180) // every 3s
-        {
-            _retargetTimer = 0;
-            PickNewTarget();
-        }
-
-        // Emit some light/dust for visibility
-        if (Main.rand.NextBool(3))
-        {
-            var dust = Dust.NewDustDirect(NPC.position, NPC.width, NPC.height,
-                DustID.TreasureSparkle, 0f, 0f, 100, default, 0.8f);
-            dust.noGravity = true;
-        }
+            Success = ok,
+            Data = new { tile_placed = ok, position = new { x = tx, y = ty }, tile_type = tileType },
+        };
     }
 
-    private void PickNewTarget()
+    protected override AgentActionResult ExecutePlaceWall(PendingAgentAction action)
     {
-        // Pick a random position within ~30 tiles of current position
-        var (cx, cy) = WorldToTile(NPC.Center);
-        int tx = cx + Main.rand.Next(-30, 31);
-        int ty = cy + Main.rand.Next(-20, 21);
-        tx = Math.Clamp(tx, 10, Main.maxTilesX - 10);
-        ty = Math.Clamp(ty, 10, Main.maxTilesY - 10);
-        _target = TileToWorld(tx, ty);
+        int tx = (int)action.GetParam("tx", -1.0);
+        int ty = (int)action.GetParam("ty", -1.0);
+        int wallType = (int)action.GetParam("wall_type", (double)WallID.Glass);
+
+        if (tx < 0 || ty < 0)
+            return AgentActionResult.Failed("INVALID_PARAMS", "tx and ty required");
+
+        bool ok = PlaceWall(tx, ty, wallType);
+        return new AgentActionResult
+        {
+            Success = ok,
+            Data = new { wall_placed = ok, position = new { x = tx, y = ty }, wall_type = wallType },
+        };
     }
 
-    private void PerformWorldInteraction()
+    protected override AgentActionResult ExecuteBreakTile(PendingAgentAction action)
     {
-        // Randomly choose an action: break tile, place tile, place wall, or do nothing
-        int action = Main.rand.Next(6);
-        var (tx, ty) = WorldToTile(NPC.Center);
+        int tx = (int)action.GetParam("tx", -1.0);
+        int ty = (int)action.GetParam("ty", -1.0);
 
-        switch (action)
+        if (tx < 0 || ty < 0)
+            return AgentActionResult.Failed("INVALID_PARAMS", "tx and ty required");
+
+        bool ok = BreakTile(tx, ty);
+        return new AgentActionResult
         {
-            case 0: // Break a nearby tile in front
-                int bx = tx + NPC.direction * 2;
-                int by = ty;
-                BreakTile(bx, by);
-                break;
+            Success = ok,
+            Data = new { tile_broken = ok, position = new { x = tx, y = ty } },
+        };
+    }
 
-            case 1: // Break tile below
-                BreakTile(tx, ty + 3);
-                break;
+    protected override AgentActionResult ExecuteBreakWall(PendingAgentAction action)
+    {
+        int tx = (int)action.GetParam("tx", -1.0);
+        int ty = (int)action.GetParam("ty", -1.0);
 
-            case 2: // Place a dirt tile below if missing
-                var below = Main.tile[tx, ty + 3];
-                if (below != null && !below.HasTile)
-                    PlaceTile(tx, ty + 3, TileID.Dirt);
-                break;
+        if (tx < 0 || ty < 0)
+            return AgentActionResult.Failed("INVALID_PARAMS", "tx and ty required");
 
-            case 3: // Place a stone tile
-                var spot = Main.tile[tx + 2, ty];
-                if (spot != null && !spot.HasTile)
-                    PlaceTile(tx + 2, ty, TileID.Stone);
-                break;
+        bool ok = BreakWall(tx, ty);
+        return new AgentActionResult
+        {
+            Success = ok,
+            Data = new { wall_broken = ok, position = new { x = tx, y = ty } },
+        };
+    }
 
-            case 4: // Place a glass wall in empty space
-                PlaceWall(tx, ty, WallID.Glass);
-                break;
+    protected override AgentActionResult ExecuteWait(PendingAgentAction action, int elapsedTicks)
+    {
+        int durationMs = (int)action.GetParam("duration_ms", 1000.0);
+        int elapsedMs = (int)(elapsedTicks * (1000.0 / 60.0));
 
-            case 5: // Break wall
-                BreakWall(tx + 1, ty);
-                break;
-        }
+        if (elapsedMs >= durationMs)
+            return AgentActionResult.Done(new { waited_ms = elapsedMs });
+
+        return null;
+    }
+
+    protected override AgentActionResult ExecuteTeleport(PendingAgentAction action)
+    {
+        float x = (float)action.GetParam("x", 0.0);
+        float y = (float)action.GetParam("y", 0.0);
+        Teleport(new Vector2(x, y));
+        return AgentActionResult.Done(new { position = new { x, y } });
+    }
+
+    protected override AgentActionResult ExecuteTalk(PendingAgentAction action)
+    {
+        string text = action.GetStringParam("text", "");
+        if (string.IsNullOrEmpty(text))
+            return AgentActionResult.Failed("INVALID_PARAMS", "text is required");
+
+        if (text.Length > 80)
+            text = text[..80];
+
+        Main.NewText($"<{NPC.FullName}> {text}", 200, 200, 100);
+        CombatText.NewText(NPC.Hitbox, Color.Gold, text);
+
+        return AgentActionResult.Done(new { said = text, truncated = text.Length > 80 });
     }
 }
