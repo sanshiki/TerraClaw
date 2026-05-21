@@ -63,8 +63,12 @@ class TerraClawRuntime:
             await self._bridge.connect()
 
             # Register an NPC agent at the local player's position
-            logger.info("registering_agent", agent_name=self._config.agent_name)
-            result = await self._bridge.register_agent(agent_name=self._config.agent_name)
+            logger.info("registering_agent", agent_name=self._config.agent_name,
+                        observation_radius=self._config.observation_radius)
+            result = await self._bridge.register_agent(
+                agent_name=self._config.agent_name,
+                observation_radius=self._config.observation_radius,
+            )
             if "error" in result:
                 logger.error("agent_registration_failed", error=result.get("error"))
                 return

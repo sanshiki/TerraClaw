@@ -14,17 +14,14 @@ public class ObservationCollector
     private readonly SpatialWindowExtractor _spatialWindow;
     private readonly EntityExtractor _entityExtractor;
 
-    private int _spatialRadius;
-
     public ObservationCollector(Core.BridgeConfig config, Event.EventBus eventBus)
     {
         _config = config;
         _spatialWindow = new SpatialWindowExtractor();
         _entityExtractor = new EntityExtractor();
-        _spatialRadius = config.SpatialWindowRadius;
     }
 
-    public string BuildAgentObservation(NPC npc, string agentId, int tick)
+    public string BuildAgentObservation(NPC npc, string agentId, int tick, int spatialRadius)
     {
         var observation = new
         {
@@ -40,7 +37,7 @@ public class ObservationCollector
                 direction = npc.direction == 1 ? "right" : "left",
             },
             world = ExtractWorldState(npc.Center),
-            spatial_window = _spatialWindow.Extract(npc.Center, _spatialRadius),
+            spatial_window = _spatialWindow.Extract(npc.Center, spatialRadius),
             entities = _entityExtractor.Extract(npc.Center, npc.whoAmI),
         };
 

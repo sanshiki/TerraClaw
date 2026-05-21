@@ -103,9 +103,9 @@ public class ExampleTerraClawAgent : BridgeAgent
         if (tx >= Main.maxTilesX || ty >= Main.maxTilesY)
             return AgentActionResult.Failed("INVALID_PARAMS", "tx or ty out of bounds");
 
-        var tile = Main.tile[tx, ty];
-        if (tile == null || !tile.HasTile)
-            return AgentActionResult.Failed("INVALID_PARAMS", "No tile to break at specified coordinates");
+        // var tile = Main.tile[tx, ty];
+        // if (tile == null || !tile.HasTile)
+        //     return AgentActionResult.Failed("INVALID_PARAMS", "No tile to break at specified coordinates");
 
         Vector2 dist = new Vector2(tx * 16 + 8, ty * 16 + 8) - NPC.Center;
         Vector2 dir = dist;
@@ -194,4 +194,7 @@ public class ExampleTerraClawAgent : BridgeAgent
 
         return AgentActionResult.Done(new { said = text, truncated = text.Length > 80 });
     }
+
+    protected override AgentActionResult? ExecuteScanArea(PendingAgentAction action)
+        => base.ExecuteScanArea(action);
 }

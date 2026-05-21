@@ -7,7 +7,6 @@ public class BridgeConfig
     public int ListenPort { get; set; } = 9777;
     public string SharedSecret { get; set; } = "terraclaw-dev";
     public int ObservationSendRateHz { get; set; } = 10;
-    public int SpatialWindowRadius { get; set; } = 30;
     public int HeartbeatIntervalMs { get; set; } = 2000;
     public int ConnectionTimeoutMs { get; set; } = 10000;
     public int MaxActionQueueSize { get; set; } = 50;

@@ -229,6 +229,10 @@ public class WebSocketServer : IDisposable
                 case "skill.cancel":
                     break;
 
+                case "observation.configure":
+                    Core.BridgeModSystem.Instance?.HandleObservationConfigure(conn, payload);
+                    break;
+
                 case "agent.register":
                     Core.BridgeModSystem.Instance?.HandleAgentRegister(conn, payload);
                     break;

@@ -218,11 +218,15 @@ class BridgeClient:
     async def request_observation(self) -> None:
         self._enqueue("observation.request", {})
 
-    async def register_agent(self, position: tuple[float, float] | None = None, agent_name: str = "terraclaw") -> dict:
+    async def register_agent(self, position: tuple[float, float] | None = None,
+                              agent_name: str = "terraclaw",
+                              observation_radius: int | None = None) -> dict:
         """Register an NPC agent. Returns the registration response."""
         payload: dict = {"agent_name": agent_name}
         if position:
             payload["position"] = {"x": position[0], "y": position[1]}
+        if observation_radius is not None:
+            payload["observation_radius"] = observation_radius
         self._enqueue("agent.register", payload)
         dprint("[BRIDGE]", "Waiting for agent.registered...")
         deadline = time.monotonic() + 5.0

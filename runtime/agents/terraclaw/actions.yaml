@@ -162,3 +162,18 @@ cancel_action:
         description: "The action_id to cancel"
     required: [action_id]
   bridge_action: cancel_action
+
+scan_area:
+  description: "Perform a one-time wide-radius scan of the surrounding area. Temporarily increases the observation radius for the next observation cycle, allowing the agent to see farther than normal. The observation data will arrive in the next observation message as usual."
+  enabled: true
+  parameters:
+    type: object
+    properties:
+      radius:
+        type: integer
+        description: "Scan radius in tiles (larger = wider area but more data)"
+        minimum: 1
+        maximum: 200
+        default: 40
+    required: []
+  bridge_action: scan_area

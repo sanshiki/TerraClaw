@@ -14,9 +14,16 @@ public class BridgeAgent : TerraClawAgent
     public string ConnectionId { get; private set; }
     public string AgentName { get; private set; }
 
+    /// <summary>Per-agent observation radius in tiles. Defaults to 10.</summary>
+    public int ObservationRadius { get; set; } = 10;
+
     private readonly ConcurrentQueue<PendingAgentAction> _actionQueue = new();
     private PendingAgentAction _currentAction;
     private int _currentActionTick;
+
+    // scan_area state: >0 when armed, consumed by GetEffectiveObservationRadius
+    private int _scanRadius;
+    private bool _scanRadiusConsumed;
 
     public BridgeAgent(string agentId, string connectionId, string agentName = "terraclaw")
     {
@@ -105,6 +112,22 @@ public class BridgeAgent : TerraClawAgent
             ReportActionResult(cancelled, AgentActionResult.Failed("CANCELLED", "Action was cancelled"));
     }
 
+    /// <summary>Get the effective radius for the next observation.
+    /// Returns the pending scan radius if a scan_area is underway,
+    /// otherwise returns the agent's configured ObservationRadius.
+    /// Called by BridgeModSystem.SendAgentObservations().</summary>
+    public int GetEffectiveObservationRadius()
+    {
+        if (_scanRadius > 0)
+        {
+            var r = _scanRadius;
+            _scanRadius = 0;
+            _scanRadiusConsumed = true;
+            return r;
+        }
+        return ObservationRadius;
+    }
+
     private AgentActionResult ExecuteAction(PendingAgentAction action, int elapsedTicks)
     {
         int elapsedMs = (int)(elapsedTicks * (1000.0 / 60.0));
@@ -139,6 +162,9 @@ public class BridgeAgent : TerraClawAgent
             case "talk":
                 return ExecuteTalk(action);
 
+            case "scan_area":
+                return ExecuteScanArea(action);
+
             default:
                 return AgentActionResult.Failed("UNKNOWN_ACTION", $"Unknown action type: {action.ActionType}");
         }
@@ -167,6 +193,19 @@ public class BridgeAgent : TerraClawAgent
 
     protected virtual AgentActionResult ExecuteTalk(PendingAgentAction action)
         => AgentActionResult.Failed("NOT_IMPLEMENTED", "ExecuteTalk not implemented");
+
+    protected virtual AgentActionResult? ExecuteScanArea(PendingAgentAction action)
+    {
+        if (!_scanRadiusConsumed && _scanRadius == 0)
+        {
+            double radius = action.GetParam("radius", 40);
+            _scanRadius = Math.Clamp((int)radius, 1, 200);
+        }
+        if (!_scanRadiusConsumed)
+            return null; // waiting for observation cycle
+        _scanRadiusConsumed = false;
+        return AgentActionResult.Done(new { scan_radius = _scanRadius });
+    }
 
     private void ReportActionResult(PendingAgentAction action, AgentActionResult result)
     {

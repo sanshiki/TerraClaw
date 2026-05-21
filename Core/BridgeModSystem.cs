@@ -29,7 +29,7 @@ public class BridgeModSystem : ModSystem
     public static Vector2? PendingSpawnPosition { get; set; }
 
     // Pending agent registrations queued from WebSocket thread, processed on main thread
-    private readonly ConcurrentQueue<(BridgeConnection conn, float x, float y, string agentName)> _pendingRegistrations = new();
+    private readonly ConcurrentQueue<(BridgeConnection conn, float x, float y, string agentName, int observationRadius)> _pendingRegistrations = new();
 
     public override void Load()
     {
@@ -65,11 +65,11 @@ public class BridgeModSystem : ModSystem
     {
         while (_pendingRegistrations.TryDequeue(out var entry))
         {
-            DoAgentRegister(entry.conn, entry.x, entry.y, entry.agentName);
+            DoAgentRegister(entry.conn, entry.x, entry.y, entry.agentName, entry.observationRadius);
         }
     }
 
-    private void DoAgentRegister(BridgeConnection conn, float x, float y, string agentName = "terraclaw")
+    private void DoAgentRegister(BridgeConnection conn, float x, float y, string agentName = "terraclaw", int observationRadius = 10)
     {
         if (_connectionToAgentId.TryGetValue(conn.Id, out var existingId))
             UnregisterAgent(existingId);
@@ -87,6 +87,7 @@ public class BridgeModSystem : ModSystem
         }
 
         _agents[agentId] = agent;
+        agent.ObservationRadius = observationRadius;
         _connectionToAgentId[conn.Id] = agentId;
 
         var npc = Main.npc[npcIndex];
@@ -142,7 +143,8 @@ public class BridgeModSystem : ModSystem
             if (npc == null || !npc.active || npc.whoAmI < 0 || npc.whoAmI >= Main.maxNPCs)
                 continue;
 
-            var json = Collector.BuildAgentObservation(npc, agent.AgentId, _tickCounter);
+            var effectiveRadius = agent.GetEffectiveObservationRadius();
+            var json = Collector.BuildAgentObservation(npc, agent.AgentId, _tickCounter, effectiveRadius);
             var conn = WebSocketServer.Connections.FirstOrDefault(c => c.Id == agent.ConnectionId);
             conn?.OutgoingQueue.Enqueue(json);
         }
@@ -154,11 +156,14 @@ public class BridgeModSystem : ModSystem
     {
         float x = 0, y = 0;
         string agentName = "terraclaw";
+        int observationRadius = 10;
 
         if (payload.ValueKind == JsonValueKind.Object)
         {
             if (payload.TryGetProperty("agent_name", out var an))
                 agentName = an.GetString() ?? "terraclaw";
+            if (payload.TryGetProperty("observation_radius", out var or))
+                observationRadius = or.GetInt32();
         }
 
         if (payload.ValueKind == JsonValueKind.Object && payload.TryGetProperty("position", out var pos))
@@ -179,7 +184,7 @@ public class BridgeModSystem : ModSystem
         }
 
         // Queue registration to run on main thread (NPC.NewNPC must be main thread)
-        _pendingRegistrations.Enqueue((conn, x, y, agentName));
+        _pendingRegistrations.Enqueue((conn, x, y, agentName, observationRadius));
     }
 
     public void HandleAgentAction(BridgeConnection conn, JsonElement payload)
@@ -243,6 +248,16 @@ public class BridgeModSystem : ModSystem
             action_type = action.ActionType,
         }, sessionId: conn.Id);
         conn.OutgoingQueue.Enqueue(ack);
+    }
+
+    public void HandleObservationConfigure(BridgeConnection conn, JsonElement payload)
+    {
+        if (!_connectionToAgentId.TryGetValue(conn.Id, out var agentId)
+            || !_agents.TryGetValue(agentId, out var agent))
+            return;
+
+        if (payload.TryGetProperty("spatial_radius", out var radius))
+            agent.ObservationRadius = radius.GetInt32();
     }
 
     public void HandleAgentActionCancel(BridgeConnection conn, JsonElement payload)

@@ -57,5 +57,6 @@ replay:
 tick_rate_hz: 10.0
 llm_call_interval_s: 5.0
 agent: "terraclaw"
+observation_radius: 10   # Default observation radius in tiles (default normal = 10, scan_area = 40)
 log_level: "INFO"
 verbose: true   # Set true for detailed debug output

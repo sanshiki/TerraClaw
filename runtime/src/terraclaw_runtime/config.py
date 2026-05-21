@@ -93,6 +93,7 @@ class RuntimeConfig:
     tick_rate_hz: float = 10.0
     llm_call_interval_s: float = 5.0
     agent_name: str = "terraclaw"
+    observation_radius: int = 10
     log_file: str = ""
     log_level: str = "INFO"
     verbose: bool = False
@@ -126,6 +127,7 @@ class RuntimeConfig:
             tick_rate_hz=data.get("tick_rate_hz", 10.0),
             llm_call_interval_s=data.get("llm_call_interval_s", 5.0),
             agent_name=data.get("agent", "terraclaw"),
+            observation_radius=data.get("observation_radius", 10),
             log_file=data.get("log_file", ""),
             log_level=data.get("log_level", "INFO"),
             verbose=data.get("verbose", False),
