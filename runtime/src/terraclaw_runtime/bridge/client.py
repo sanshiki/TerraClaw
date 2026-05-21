@@ -134,16 +134,23 @@ class BridgeClient:
                     payload=envelope.get("payload", {}),
                 )
 
+                # Debug: log all message types briefly
+                if msg.type not in ("ping", "pong", "observation.event"):
+                    dprint("[BRIDGE]", f"recv: {msg.type}" + (f" action_id={msg.payload.get('action_id', '')[:16]}..." if msg.type in ("agent.action.result", "agent.action.queued") else ""))
+
                 # Route agent.action.result directly to the waiting future
                 if msg.type == "agent.action.result":
                     action_id = msg.payload.get("action_id", "")
                     if action_id:
                         async with self._pending_lock:
                             future = self._pending.get(action_id)
+                            has_result = action_id in self._resolved_results
+                            dprint("[BRIDGE]", f"recv result: action={action_id[:12]}... pending={future is not None} resolved={has_result}")
                             if future is not None and not future.done():
                                 future.set_result(msg.payload)
                                 self._pending.pop(action_id, None)
                                 self._resolved_results[action_id] = msg.payload
+                                dprint("[BRIDGE]", f"result resolved: {action_id[:12]}...")
                                 continue
 
                 # Route player.chat instructions to the instructions queue
@@ -292,12 +299,20 @@ class BridgeClient:
             if future is not None:
                 if future.done():
                     try:
-                        return future.result()
+                        res = future.result()
+                        dprint("[BRIDGE]", f"poll {action_id[:12]}... → future done: {res.get('status', '?')}")
+                        return res
                     except Exception as e:
+                        dprint("[BRIDGE]", f"poll {action_id[:12]}... → future error: {e}")
                         return {"status": "error", "error": str(e)}
+                dprint("[BRIDGE]", f"poll {action_id[:12]}... → future not done")
                 return None
             # Check resolved cache — action completed and future was cleaned up
             result = self._resolved_results.get(action_id)
+            if result:
+                dprint("[BRIDGE]", f"poll {action_id[:12]}... → cached: {result.get('status', '?')}")
+            else:
+                dprint("[BRIDGE]", f"poll {action_id[:12]}... → not found in pending or resolved")
             return result
 
     async def cancel_action(self, agent_id: str, action_id: str | None = None) -> None:

@@ -173,6 +173,13 @@ class RuntimeConfig:
         """Resolve path to the active agent's Lua skills directory."""
         return str(self._config_dir.parent / "agents" / self.agent_name / "skill")
 
+    def get_memory_db_path(self) -> str:
+        """Resolve memory database path relative to the runtime root."""
+        path = Path(self.memory.db_path)
+        if path.is_absolute():
+            return str(path)
+        return str(self._config_dir.parent / path)
+
     @classmethod
     def from_env(cls) -> RuntimeConfig:
         """Create config with env var overrides only (for backwards compat)."""

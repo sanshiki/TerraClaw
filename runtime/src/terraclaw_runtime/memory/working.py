@@ -7,7 +7,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
-from terraclaw_runtime.bridge.message import Observation, Vec2
+from terraclaw_runtime.bridge.message import AgentObservation, Vec2
 
 
 @dataclass
@@ -15,7 +15,7 @@ class WorkingMemory:
     """Holds recent observations, the current plan, and active constraints."""
 
     max_items: int = 100
-    recent_observations: deque[Observation] = field(default_factory=deque)
+    recent_observations: deque[AgentObservation] = field(default_factory=deque)
     recent_positions: deque[tuple[float, float, float]] = field(default_factory=deque)  # (x, y, timestamp)
     recent_actions: deque[dict[str, Any]] = field(default_factory=deque)
     recent_events: deque[dict[str, Any]] = field(default_factory=deque)
@@ -24,14 +24,14 @@ class WorkingMemory:
     last_llm_response: str = ""
     session_stats: dict[str, Any] = field(default_factory=dict)
 
-    def update_observation(self, obs: Observation) -> None:
+    def update_observation(self, obs: AgentObservation) -> None:
         self.recent_observations.append(obs)
         if len(self.recent_observations) > self.max_items:
             self.recent_observations.popleft()
 
         self.recent_positions.append((
-            obs.player.position.x,
-            obs.player.position.y,
+            obs.agent.position.x,
+            obs.agent.position.y,
             time.monotonic(),
         ))
         if len(self.recent_positions) > 300:  # ~30 seconds at 10Hz

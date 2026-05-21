@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from terraclaw_runtime.bridge.message import Observation
+from pathlib import Path
+
+from terraclaw_runtime.bridge.message import AgentObservation
 from terraclaw_runtime.memory.episodic.store import EpisodicStore
 from terraclaw_runtime.memory.spatial.world_map import SpatialMemory
 from terraclaw_runtime.memory.working import WorkingMemory
@@ -12,33 +14,32 @@ class MemoryManager:
     """Coordinates spatial, episodic, and working memory."""
 
     def __init__(self, db_path: str, working_max_items: int = 100):
+        # Ensure parent directory exists
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.spatial = SpatialMemory(db_path)
         self.episodic = EpisodicStore(db_path)
         self.working = WorkingMemory(max_items=working_max_items)
 
-    def update(self, obs: Observation) -> None:
+    def update(self, obs: AgentObservation) -> None:
         """Update all memory subsystems from a new observation."""
         # Working memory — always updated
         self.working.update_observation(obs)
 
         # Spatial memory — update from spatial window
-        player_tx = int(obs.player.position.x / 16)
-        player_ty = int(obs.player.position.y / 16)
+        agent_tx = int(obs.agent.position.x / 16)
+        agent_ty = int(obs.agent.position.y / 16)
         if obs.spatial_window:
             self.spatial.update_from_observation(
-                obs.tick, player_tx, player_ty, obs.spatial_window,
+                obs.tick, agent_tx, agent_ty, obs.spatial_window,
             )
 
-        # Episodic — record significant state changes
-        hp_ratio = obs.player.health_current / max(obs.player.health_max, 1)
-        if hp_ratio < 0.5:
-            self.episodic.record_event(
-                obs.tick, "player.low_health",
-                {"current": obs.player.health_current, "max": obs.player.health_max},
-                importance=0.7,
-            )
+    def record_action(self, tick: int, action_type: str, params: dict,
+                      result: dict, success: bool) -> None:
+        """Record an action in working + episodic memory."""
+        self.working.add_action(action_type, params)
+        self.episodic.record_action(tick, action_type, params, result, success)
 
-    def get_context_for_llm(self, obs: Observation) -> str:
+    def get_context_for_llm(self, obs: AgentObservation) -> str:
         """Assemble memory context for the LLM prompt."""
         parts = []
 
@@ -48,9 +49,9 @@ class MemoryManager:
             parts.append(working_summary)
 
         # Spatial context
-        player_tx = int(obs.player.position.x / 16)
-        player_ty = int(obs.player.position.y / 16)
-        spatial = self.spatial.query_nearby(player_tx, player_ty, radius_tiles=40)
+        agent_tx = int(obs.agent.position.x / 16)
+        agent_ty = int(obs.agent.position.y / 16)
+        spatial = self.spatial.query_nearby(agent_tx, agent_ty, radius_tiles=40)
         if spatial:
             parts.append(spatial)
 

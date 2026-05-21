@@ -15,6 +15,7 @@ from terraclaw_runtime.bridge.client import BridgeClient
 from terraclaw_runtime.bridge.message import AgentObservation
 from terraclaw_runtime.planning.plan import Plan
 
+from terraclaw_runtime.memory.manager import MemoryManager
 from terraclaw_runtime._debug import dprint
 
 logger = structlog.get_logger()
@@ -43,7 +44,9 @@ class AgentLoop:
         tick_rate_hz: float = 10.0,
         system_prompt_path: str = "config/system.md",
         identity_path: str | None = None,
+        memory: MemoryManager | None = None,
         max_history_messages: int = 10,
+        dashboard: Any = None,  # LiveDashboard instance for real-time UI
     ):
         self._bridge = bridge
         self._llm = llm
@@ -56,11 +59,13 @@ class AgentLoop:
         self._llm_call_interval_s = llm_call_interval_s
         self._tick_rate_hz = tick_rate_hz
         self._max_history_messages = max_history_messages
+        self._memory = memory  # MemoryManager or None
+        self._dashboard = dashboard  # LiveDashboard or None
 
         self._last_llm_call_time = 0.0
         self._plan: Plan | None = None
         self._action_results: list[str] = []
-        self._pending_actions: dict[str, float] = {}  # action_id → start_time
+        self._pending_actions: dict[str, dict] = {}  # action_id → {"type": str, "start": float}
         self._recently_resolved: dict[str, float] = {}  # action_id → timestamp; recently completed/cancelled, shown in prompt for a few turns
         self._conversation_history: list[dict] = []
         self._running = False
@@ -106,7 +111,12 @@ class AgentLoop:
         logger.debug("llm_turn_start", tick=obs.tick)
         dprint("[AGENT]",f"── LLM turn (tick={obs.tick}) ──")
 
-        memory_context = ""
+        # Update memory from latest observation
+        if self._memory:
+            self._memory.update(obs)
+            memory_context = self._memory.get_context_for_llm(obs)
+        else:
+            memory_context = ""
         plan_context = self._format_plan() if self._plan else ""
         pending_context, completed_context = await self._format_pending_actions()
         resolved_context = self._format_resolved_actions()
@@ -134,6 +144,15 @@ class AgentLoop:
                      has_instructions=bool(instructions),
                      action_results=len(self._action_results),
                      pos=(obs.agent.position.x, obs.agent.position.y))
+
+        if self._dashboard:
+            self._dashboard.publish("llm_call", {
+                "turn": self._dashboard.next_turn(),
+                "tick": obs.tick,
+                "pos": {"x": obs.agent.position.x, "y": obs.agent.position.y},
+                "pending_actions": len(self._pending_actions) if self._pending_actions else 0,
+                "has_instructions": bool(instructions),
+            })
         t0 = time.monotonic()
         response = await self._llm.generate(
             system_prompt=self._prompt_builder.get_system_prompt(),
@@ -145,6 +164,16 @@ class AgentLoop:
             print("[AGENT]",f"LLM says:\n{response.text}")
         if response.tool_calls:
             dprint("[AGENT]",f"LLM tools: {', '.join(f'{tc.name}({tc.arguments})' for tc in response.tool_calls)}")
+
+        if self._dashboard:
+            self._dashboard.publish("llm_response", {
+                "turn": self._dashboard._turn_counter,  # current turn (set by llm_call)
+                "text": response.text or "",
+                "tool_calls": [
+                    {"name": tc.name, "arguments": tc.arguments} for tc in response.tool_calls
+                ],
+                "duration_s": round(time.monotonic() - t0, 1),
+            })
 
         self._last_llm_call_time = time.monotonic()
 
@@ -188,7 +217,10 @@ class AgentLoop:
 
             # Track actions that were started (non-blocking dispatch)
             if result.get("status") == "started" and result.get("action_id"):
-                self._pending_actions[result["action_id"]] = time.monotonic()
+                self._pending_actions[result["action_id"]] = {
+                    "type": result.get("action_type", tc.name),
+                    "start": time.monotonic(),
+                }
             elif tc.name not in _IMMEDIATE_INTERNAL:
                 # Only non-internal tools that return immediately trigger follow-up
                 all_non_blocking = False
@@ -202,6 +234,13 @@ class AgentLoop:
                 if cancelled_id:
                     self._recently_resolved[cancelled_id] = time.monotonic()
 
+            if self._dashboard:
+                self._dashboard.publish("tool_result", {
+                    "turn": self._dashboard._turn_counter,
+                    "tool": tc.name,
+                    "result": result,
+                })
+
             status = result.get("status", "unknown")
             err = result.get("error")
             if err:
@@ -210,6 +249,10 @@ class AgentLoop:
             else:
                 print("[AGENT]",f"  << {tc.name}: {status}")
                 self._action_results.append(f"{tc.name}: {status}")
+
+            # Record action to memory
+            if self._memory:
+                self._memory.record_action(obs.tick, tc.name, tc.arguments, result, success=not bool(err))
 
             self._conversation_history.append({
                 "role": "user",
@@ -312,6 +355,9 @@ class AgentLoop:
             lines.append(f"- {instr}")
         if not lines:
             return ""
+        if self._dashboard:
+            for line in lines:
+                self._dashboard.publish("player_instruction", {"text": line})
         return "The player has sent you these instructions:\n" + "\n".join(lines)
 
     async def _format_pending_actions(self) -> tuple[str, str]:
@@ -319,30 +365,54 @@ class AgentLoop:
 
         Checks the bridge for completed actions so the LLM gets timely
         feedback instead of stale "running" entries.
+        Falls back to estimated completion after a per-action timeout
+        when the bridge result never arrives.
         """
         if not self._pending_actions:
             return "", ""
+
+        _SINGLE_TURN = frozenset({"talk", "teleport", "place_tile", "place_wall", "break_wall"})
 
         now = time.monotonic()
         pending_lines: list[str] = []
         completed_lines: list[str] = []
         to_remove: list[str] = []
 
-        for aid, start in list(self._pending_actions.items()):
+        for aid, info in list(self._pending_actions.items()):
+            action_type = info.get("type", "unknown")
+            start = info.get("start", now)
+
             # Check if the action has completed via the bridge's future
             result = await self._bridge.poll_action_result(aid)
             if result is not None:
                 status = result.get("status", "completed")
-                action_type = result.get("action_type", "unknown")
                 completed_lines.append(f"  {action_type} ({aid[:12]}...) → {status}")
                 self._recently_resolved[aid] = time.monotonic()
                 to_remove.append(aid)
-            elif now - start > 120:
-                # Stale entry — likely lost/crashed
+                continue
+
+            # Per-action timeout: if the bridge result never arrives,
+            # assume the action completed on C# side.
+            elapsed = now - start
+            if action_type in _SINGLE_TURN:
+                timeout = 5.0
+            elif action_type == "break_tile":
+                timeout = 8.0
+            elif action_type == "wait":
+                timeout = 6.0
+            elif action_type == "move_to":
+                timeout = 30.0
+            else:
+                timeout = 30.0
+
+            if elapsed > timeout:
+                # Timed out — assume the action completed on C# side even if
+                # the result message was lost (common race with result delivery).
+                completed_lines.append(f"  {action_type} ({aid[:12]}...) → estimated completion")
+                self._recently_resolved[aid] = time.monotonic()
                 to_remove.append(aid)
             else:
-                elapsed = now - start
-                pending_lines.append(f"  {aid[:12]}... running for {elapsed:.0f}s")
+                pending_lines.append(f"  {action_type} ({aid[:12]}...) running for {elapsed:.0f}s")
 
         for aid in to_remove:
             self._pending_actions.pop(aid, None)

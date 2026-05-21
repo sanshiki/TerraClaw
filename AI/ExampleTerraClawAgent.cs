@@ -100,6 +100,13 @@ public class ExampleTerraClawAgent : BridgeAgent
         if (tx < 0 || ty < 0)
             return AgentActionResult.Failed("INVALID_PARAMS", "tx and ty required");
 
+        if (tx >= Main.maxTilesX || ty >= Main.maxTilesY)
+            return AgentActionResult.Failed("INVALID_PARAMS", "tx or ty out of bounds");
+
+        var tile = Main.tile[tx, ty];
+        if (tile == null || !tile.HasTile)
+            return AgentActionResult.Failed("INVALID_PARAMS", "No tile to break at specified coordinates");
+
         Vector2 dist = new Vector2(tx * 16 + 8, ty * 16 + 8) - NPC.Center;
         Vector2 dir = dist;
         if(dir != Vector2.Zero)

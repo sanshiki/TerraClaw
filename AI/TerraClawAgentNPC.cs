@@ -48,7 +48,7 @@ public class TerraClawAgentNPC : ModNPC
         Agent.AI();
 
         // velocity damping
-        NPC.velocity *= 0.9f;
+        NPC.velocity *= 0.95f;
     }
 
     public override bool CheckDead()

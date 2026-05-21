@@ -17,6 +17,7 @@ from terraclaw_runtime.agent.loop import AgentLoop
 from terraclaw_runtime.agent.tool_registry import ToolRegistry
 from terraclaw_runtime.bridge.client import BridgeClient
 from terraclaw_runtime.config import RuntimeConfig
+from terraclaw_runtime.memory.manager import MemoryManager
 from terraclaw_runtime.skills.registry import SkillRegistry
 
 logger = structlog.get_logger()
@@ -33,6 +34,7 @@ class TerraClawRuntime:
         self._tools: ToolRegistry | None = None
         self._skills: SkillRegistry | None = None
         self._agent: AgentLoop | None = None
+        self._memory: MemoryManager | None = None
         self._human_mode_stop: asyncio.Event | None = None
         self._webui_server = None  # uvicorn.Server instance
 
@@ -46,6 +48,16 @@ class TerraClawRuntime:
                 loop.add_signal_handler(sig, self._handle_shutdown)
             except NotImplementedError:
                 pass
+
+        # Start live dashboard server (non-blocking background task)
+        dashboard = None
+        dashboard_port = int(os.getenv("DASHBOARD_PORT", "9090"))
+        try:
+            from terraclaw_runtime.dashboard import LiveDashboard
+            dashboard = LiveDashboard()
+            asyncio.create_task(dashboard.serve(port=dashboard_port))
+        except Exception:
+            dashboard = None
 
         try:
             await self._bridge.connect()
@@ -71,6 +83,12 @@ class TerraClawRuntime:
             if loaded:
                 logger.info("lua_skills_loaded", count=loaded)
 
+            # Initialize memory system
+            self._memory = MemoryManager(
+                db_path=self._config.get_memory_db_path(),
+                working_max_items=self._config.memory.working_memory_max_items,
+            )
+
             if self._config.human_mode:
                 await self._start_human_mode()
             else:
@@ -83,13 +101,17 @@ class TerraClawRuntime:
                     tick_rate_hz=self._config.tick_rate_hz,
                     system_prompt_path=self._config.get_system_prompt_path(),
                     identity_path=self._config.get_identity_path(),
+                    memory=self._memory,
                     max_history_messages=self._config.prompt.max_history_messages,
+                    dashboard=dashboard,
                 )
                 await self._agent.run()
         except Exception:
             logger.exception("runtime_fatal_error")
             raise
         finally:
+            if self._memory:
+                self._memory.close()
             if self._agent_id:
                 logger.info("unregistering_agent", agent_id=self._agent_id)
                 await self._bridge.unregister_agent(self._agent_id)
@@ -151,6 +173,8 @@ class TerraClawRuntime:
     async def stop(self) -> None:
         if self._agent:
             self._agent.stop()
+        if self._memory:
+            self._memory.close()
         if self._human_mode_stop:
             self._human_mode_stop.set()
         if self._webui_server:
@@ -203,7 +227,7 @@ def _setup_logging(config: RuntimeConfig) -> None:
     if config.log_file:
         log_path = Path(config.log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(config.log_file, encoding="utf-8", mode="w")
+        file_handler = logging.FileHandler(config.log_file, encoding="utf-8", mode="a")
         file_handler.setLevel(logging.DEBUG)  # Always debug level in file
         file_handler.setFormatter(
             structlog.stdlib.ProcessorFormatter(
