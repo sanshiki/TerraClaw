@@ -9,6 +9,7 @@
 /TerraClaw.csproj.Iscache
 /TerraClaw.sln
 /runtime/logs/
+/runtime/data/memory.db
 
 # python cache and egg-info directories
 __pycache__/

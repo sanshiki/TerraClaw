@@ -231,7 +231,7 @@ def _setup_logging(config: RuntimeConfig) -> None:
     if config.log_file:
         log_path = Path(config.log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(config.log_file, encoding="utf-8", mode="a")
+        file_handler = logging.FileHandler(config.log_file, encoding="utf-8", mode="w")
         file_handler.setLevel(logging.DEBUG)  # Always debug level in file
         file_handler.setFormatter(
             structlog.stdlib.ProcessorFormatter(

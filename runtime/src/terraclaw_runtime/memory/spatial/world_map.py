@@ -98,7 +98,8 @@ class SpatialMemory:
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(poi_type, tile_x, tile_y) DO UPDATE SET
                      last_visited_tick = excluded.last_visited_tick,
-                     label = excluded.label""",
+                     label = excluded.label,
+                     is_consumed = 0""",
                 (ttype, tx, ty, tx * 16.0, ty * 16.0,
                  tile.get("label", ""), str(tile),
                  obs_tick, obs_tick),

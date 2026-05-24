@@ -254,6 +254,16 @@ class AgentLoop:
             if self._memory:
                 self._memory.record_action(obs.tick, tc.name, tc.arguments, result, success=not bool(err))
 
+            # Optimistically mark break_tile/break_wall POI consumed to stop
+            # the LLM from re-targeting the same tile when C# action results
+            # don't make it back to Python in time (or at all).
+            if tc.name in ("break_tile", "break_wall") and self._memory:
+                tx = tc.arguments.get("tx")
+                ty = tc.arguments.get("ty")
+                if tx is not None and ty is not None:
+                    self._memory.spatial.mark_poi_consumed(int(tx), int(ty))
+                    dprint("[MEMORY]", f"  Marked {tc.name} POI consumed at ({tx}, {ty})")
+
             self._conversation_history.append({
                 "role": "user",
                 "content": [{
