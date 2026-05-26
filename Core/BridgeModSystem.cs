@@ -22,7 +22,7 @@ public class BridgeModSystem : ModSystem
     public EventBus EventBus { get; private set; } = null!;
     public BridgeConfig Config { get; private set; } = null!;
 
-    private readonly Dictionary<string, BridgeAgent> _agents = new();
+    private readonly Dictionary<string, TerraClawAgent> _agents = new();
     private readonly Dictionary<string, string> _connectionToAgentId = new();
     private int _tickCounter;
 
@@ -87,7 +87,8 @@ public class BridgeModSystem : ModSystem
         }
 
         _agents[agentId] = agent;
-        agent.ObservationRadius = observationRadius;
+        if (agent is BridgeAgent bridgeAgent)
+            bridgeAgent.ObservationRadius = observationRadius;
         _connectionToAgentId[conn.Id] = agentId;
 
         var npc = Main.npc[npcIndex];
@@ -101,13 +102,42 @@ public class BridgeModSystem : ModSystem
         conn.OutgoingQueue.Enqueue(response);
     }
 
-    private static BridgeAgent CreateAgent(string agentId, string connectionId, string agentName)
+    private static TerraClawAgent CreateAgent(string agentId, string connectionId, string agentName)
     {
         return agentName switch
         {
             "terraclaw" => new ExampleTerraClawAgent(agentId, connectionId, agentName),
             _ => new BridgeAgent(agentId, connectionId, agentName),
         };
+    }
+
+    public int DeliverPlayerInstruction(string playerName, string instruction)
+    {
+        int delivered = 0;
+        foreach (var agent in _agents.Values)
+        {
+            if (!agent.IsActive || agent is not IPlayerInstructionReceiver receiver)
+                continue;
+
+            receiver.ReceivePlayerInstruction(playerName, instruction);
+            delivered++;
+        }
+
+        for (int i = 0; i < Main.maxNPCs; i++)
+        {
+            var npc = Main.npc[i];
+            if (npc == null || !npc.active || npc.ModNPC is not TerraClawAgentNPC agentNpc)
+                continue;
+
+            var agent = agentNpc.Agent;
+            if (agent == null || _agents.ContainsValue(agent)
+                || !agent.IsActive || agent is not IPlayerInstructionReceiver receiver)
+                continue;
+
+            receiver.ReceivePlayerInstruction(playerName, instruction);
+            delivered++;
+        }
+        return delivered;
     }
 
     public override void Unload()
@@ -143,9 +173,12 @@ public class BridgeModSystem : ModSystem
             if (npc == null || !npc.active || npc.whoAmI < 0 || npc.whoAmI >= Main.maxNPCs)
                 continue;
 
-            var effectiveRadius = agent.GetEffectiveObservationRadius();
-            var json = Collector.BuildAgentObservation(npc, agent.AgentId, _tickCounter, effectiveRadius);
-            var conn = WebSocketServer.Connections.FirstOrDefault(c => c.Id == agent.ConnectionId);
+            if (agent is not BridgeAgent bridgeAgent)
+                continue;
+
+            var effectiveRadius = bridgeAgent.GetEffectiveObservationRadius();
+            var json = Collector.BuildAgentObservation(npc, bridgeAgent.AgentId, _tickCounter, effectiveRadius);
+            var conn = WebSocketServer.Connections.FirstOrDefault(c => c.Id == bridgeAgent.ConnectionId);
             conn?.OutgoingQueue.Enqueue(json);
         }
     }
@@ -206,7 +239,13 @@ public class BridgeModSystem : ModSystem
             return;
         }
 
-        if (agent.ConnectionId != conn.Id)
+        if (agent is not BridgeAgent bridgeAgent)
+        {
+            conn.SendError("AGENT_ERROR", "Agent does not support legacy agent.action messages");
+            return;
+        }
+
+        if (bridgeAgent.ConnectionId != conn.Id)
         {
             conn.SendError("AGENT_ERROR", "Agent belongs to a different connection");
             return;
@@ -239,7 +278,7 @@ public class BridgeModSystem : ModSystem
             Main.NewText($"[AI] Enqueue on T{tid}: {action.ActionId[..8]}... {action.ActionType}", 200, 200, 50);
         }
 
-        agent.EnqueueAction(action);
+        bridgeAgent.EnqueueAction(action);
 
         var ack = MessageSerializer.BuildMessage("agent.action.queued", new
         {
@@ -256,8 +295,8 @@ public class BridgeModSystem : ModSystem
             || !_agents.TryGetValue(agentId, out var agent))
             return;
 
-        if (payload.TryGetProperty("spatial_radius", out var radius))
-            agent.ObservationRadius = radius.GetInt32();
+        if (agent is BridgeAgent bridgeAgent && payload.TryGetProperty("spatial_radius", out var radius))
+            bridgeAgent.ObservationRadius = radius.GetInt32();
     }
 
     public void HandleAgentActionCancel(BridgeConnection conn, JsonElement payload)
@@ -269,8 +308,8 @@ public class BridgeModSystem : ModSystem
             agentId = cid;
         else return;
 
-        if (_agents.TryGetValue(agentId, out var agent))
-            agent.ClearQueue();
+        if (_agents.TryGetValue(agentId, out var agent) && agent is BridgeAgent bridgeAgent)
+            bridgeAgent.ClearQueue();
     }
 
     public void HandleAgentUnregister(BridgeConnection conn, JsonElement payload)

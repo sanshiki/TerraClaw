@@ -249,6 +249,10 @@ public class WebSocketServer : IDisposable
                     Core.BridgeModSystem.Instance?.HandleAgentUnregister(conn, payload);
                     break;
 
+                case "llm.response":
+                    LLM.LlmBridgeSystem.Instance?.HandleResponse(payload);
+                    break;
+
                 default:
                     conn.SendError("PROTOCOL_ERROR", $"Unknown message type: {msgType}");
                     break;

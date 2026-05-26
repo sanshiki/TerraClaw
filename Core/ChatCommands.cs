@@ -37,6 +37,9 @@ public class AgentChatCommand : ModCommand
         });
 
         BridgeModSystem.Instance.WebSocketServer.Broadcast(json);
-        Main.NewText($"[TerraClaw] Instruction sent to agent: {instruction}", 150, 200, 255);
+        int delivered = BridgeModSystem.Instance.DeliverPlayerInstruction(
+            caller.Player?.name ?? "Unknown",
+            instruction);
+        Main.NewText($"[TerraClaw] Instruction sent to {delivered} agent(s): {instruction}", 150, 200, 255);
     }
 }

@@ -342,6 +342,25 @@ class BridgeClient:
         """Unregister / despawn an NPC agent."""
         self._enqueue("agent.unregister", {"agent_id": agent_id})
 
+    async def send_llm_response(
+        self,
+        request_id: str,
+        agent_id: str,
+        status: str,
+        output: dict | None = None,
+        error: str | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "request_id": request_id,
+            "agent_id": agent_id,
+            "status": status,
+        }
+        if output is not None:
+            payload["output"] = output
+        if error:
+            payload["error"] = error
+        self._enqueue("llm.response", payload)
+
     async def receive_instruction(self, timeout: float = 0.1) -> str | None:
         """Receive the next pending player.chat instruction (non-blocking)."""
         try:

@@ -24,6 +24,7 @@ public class AgentSpawner : ModItem
         {
             var worldPos = new Vector2(Main.MouseWorld.X, Main.MouseWorld.Y - 16);
             AI.TerraClawAgentNPC.Spawn(worldPos, player.GetSource_ItemUse(Item));
+            Main.NewText($"[AI] Spawned agent at ({worldPos.X:F0}, {worldPos.Y:F0})", 150, 255, 100);
         }
         return true;
     }

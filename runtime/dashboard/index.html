@@ -65,6 +65,23 @@ header h1 { font-size: 16px; font-weight: 600; color: #7aa2f7; }
   padding: 8px 12px; margin-bottom: 10px; font-size: 13px; color: #bb9af7;
 }
 .player-said::before { content: "Player: "; font-weight: 600; color: #7aa2f7; }
+.request-meta {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px; margin-bottom: 10px; font-size: 12px; color: #9aa5ce;
+}
+.meta-box { background: #14161f; border: 1px solid #2f3345; border-radius: 6px; padding: 8px; }
+.json-block {
+  background: #10121a; border: 1px solid #2f3345; border-radius: 8px;
+  padding: 10px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px; line-height: 1.45; color: #a9b1d6; white-space: pre-wrap;
+  overflow-x: auto; margin-top: 8px;
+}
+.result-ok { border-left: 3px solid #9ece6a; }
+.result-failed { border-left: 3px solid #f7768e; }
+.pill {
+  display: inline-block; padding: 2px 7px; border-radius: 999px;
+  background: #26344f; color: #7dcfff; font-size: 11px; margin-right: 6px;
+}
 #empty-msg {
   text-align: center; padding: 60px 20px; color: #565f89;
 }
@@ -124,6 +141,12 @@ function handleMessage(msg) {
       break;
     case 'player_instruction':
       addInstruction(data);
+      break;
+    case 'llm_request':
+      addLlmRequest(data);
+      break;
+    case 'llm_result':
+      addLlmResult(data);
       break;
   }
 }
@@ -214,6 +237,64 @@ function addInstruction(data) {
   el.scrollIntoView({ behavior: 'smooth', block: 'end' });
 }
 
+function addLlmRequest(data) {
+  removeEmptyMsg();
+  const el = document.createElement('div');
+  el.className = 'turn';
+  el.id = `req-${data.request_id}`;
+  const obsKeys = (data.observation_keys || []).map(k => `<span class="pill">${escapeHtml(k)}</span>`).join('');
+  el.innerHTML = `
+    <div class="turn-header">
+      <span class="turn-num">LLM Request${data.turn ? ' #' + data.turn : ''}</span>
+      <span>${new Date().toLocaleTimeString()}</span>
+    </div>
+    <div class="request-meta">
+      <div class="meta-box"><b>request</b><br>${escapeHtml(shortId(data.request_id))}</div>
+      <div class="meta-box"><b>agent</b><br>${escapeHtml(shortId(data.agent_id))}</div>
+      <div class="meta-box"><b>timeout</b><br>${data.timeout_ms || 0} ms</div>
+    </div>
+    <div class="turn-text">${escapeHtml(data.instruction || '(no instruction)')}</div>
+    <div style="margin-bottom:8px;">${obsKeys}</div>
+    <details>
+      <summary style="cursor:pointer;color:#7aa2f7;font-size:13px;">Observation</summary>
+      <div class="json-block">${escapeHtml(pretty(data.observation))}</div>
+    </details>
+    <details>
+      <summary style="cursor:pointer;color:#7aa2f7;font-size:13px;margin-top:8px;">Output Contract</summary>
+      <div class="json-block">${escapeHtml(pretty(data.output_contract))}</div>
+    </details>
+  `;
+  document.getElementById('main').appendChild(el);
+  el.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+function addLlmResult(data) {
+  removeEmptyMsg();
+  const existing = document.getElementById(`req-${data.request_id}`);
+  const el = document.createElement('div');
+  const failed = data.status !== 'completed';
+  el.className = `turn ${failed ? 'result-failed' : 'result-ok'}`;
+  el.innerHTML = `
+    <div class="turn-header">
+      <span class="turn-num">LLM ${escapeHtml(data.status || 'result')}</span>
+      <span>${data.duration_s ? data.duration_s + 's' : new Date().toLocaleTimeString()}</span>
+    </div>
+    <div class="request-meta">
+      <div class="meta-box"><b>request</b><br>${escapeHtml(shortId(data.request_id))}</div>
+      <div class="meta-box"><b>agent</b><br>${escapeHtml(shortId(data.agent_id))}</div>
+    </div>
+    ${failed
+      ? `<div class="turn-text">${escapeHtml(data.error || 'Unknown error')}</div>`
+      : `<div class="json-block">${escapeHtml(pretty(data.output))}</div>`}
+  `;
+  if (existing && existing.nextSibling) {
+    document.getElementById('main').insertBefore(el, existing.nextSibling);
+  } else {
+    document.getElementById('main').appendChild(el);
+  }
+  el.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
 function removeEmptyMsg() {
   const empty = document.getElementById('empty-msg');
   if (empty) empty.remove();
@@ -228,6 +309,15 @@ function escapeHtml(s) {
   const d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
+}
+
+function pretty(value) {
+  try { return JSON.stringify(value, null, 2); } catch (_) { return String(value || ''); }
+}
+
+function shortId(value) {
+  if (!value) return '';
+  return String(value).slice(0, 8) + '…';
 }
 
 connect();

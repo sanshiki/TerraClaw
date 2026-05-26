@@ -2,6 +2,7 @@ using System;
 using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.ID;
+using TerraClaw.LLM;
 
 namespace TerraClaw.AI;
 
@@ -14,6 +15,7 @@ public abstract class TerraClawAgent
 {
     public NPC NPC { get; set; } = null!;
     public bool IsActive { get; set; } = true;
+    public string LlmAgentId { get; internal set; } = Guid.NewGuid().ToString();
 
     /// <summary>Called once when the agent is bound to an NPC.</summary>
     public virtual void Initialize() { }
@@ -129,4 +131,16 @@ public abstract class TerraClawAgent
 
     /// <summary>Convert world-space position to tile coordinates.</summary>
     protected static (int x, int y) WorldToTile(Vector2 pos) => ((int)(pos.X / 16), (int)(pos.Y / 16));
+
+    protected LlmRequestHandle RequestLlm(
+        LlmObservation observation,
+        LlmOutput output,
+        string instruction,
+        string system = "You are an AI controller inside Terraria. Return only JSON matching the requested output contract.",
+        int timeoutMs = 30000)
+    {
+        if (LlmBridgeSystem.Instance == null)
+            throw new InvalidOperationException("LlmBridgeSystem is not loaded.");
+        return LlmBridgeSystem.Instance.Request(LlmAgentId, system, instruction, observation, output, timeoutMs);
+    }
 }

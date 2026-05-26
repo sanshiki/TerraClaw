@@ -17,6 +17,7 @@ from terraclaw_runtime.agent.loop import AgentLoop
 from terraclaw_runtime.agent.tool_registry import ToolRegistry
 from terraclaw_runtime.bridge.client import BridgeClient
 from terraclaw_runtime.config import RuntimeConfig
+from terraclaw_runtime.llm_worker import LlmWorker
 from terraclaw_runtime.memory.manager import MemoryManager
 from terraclaw_runtime.skills.registry import SkillRegistry
 
@@ -34,6 +35,7 @@ class TerraClawRuntime:
         self._tools: ToolRegistry | None = None
         self._skills: SkillRegistry | None = None
         self._agent: AgentLoop | None = None
+        self._llm_worker: LlmWorker | None = None
         self._memory: MemoryManager | None = None
         self._human_mode_stop: asyncio.Event | None = None
         self._webui_server = None  # uvicorn.Server instance
@@ -61,6 +63,10 @@ class TerraClawRuntime:
 
         try:
             await self._bridge.connect()
+
+            self._llm_worker = LlmWorker(self._bridge, self._llm, dashboard=dashboard)
+            await self._llm_worker.run()
+            return
 
             # Register an NPC agent at the local player's position
             logger.info("registering_agent", agent_name=self._config.agent_name,
@@ -167,6 +173,8 @@ class TerraClawRuntime:
 
     def _handle_shutdown(self) -> None:
         logger.info("shutdown_requested")
+        if self._llm_worker:
+            self._llm_worker.stop()
         if self._agent:
             self._agent.stop()
         if self._human_mode_stop:
@@ -175,6 +183,8 @@ class TerraClawRuntime:
             self._webui_server.should_exit = True
 
     async def stop(self) -> None:
+        if self._llm_worker:
+            self._llm_worker.stop()
         if self._agent:
             self._agent.stop()
         if self._memory:

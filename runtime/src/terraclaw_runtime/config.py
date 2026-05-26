@@ -99,6 +99,7 @@ class RuntimeConfig:
     verbose: bool = False
     human_mode: bool = False  # Run with human-in-the-loop web UI instead of LLM
     _config_dir: Path | None = None  # Set by from_yaml() — parent dir of config.yaml
+    _yaml_data: dict = field(default_factory=dict, repr=False)  # Raw YAML data for precedence checks
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> RuntimeConfig:
@@ -133,31 +134,59 @@ class RuntimeConfig:
             verbose=data.get("verbose", False),
         )
         config._config_dir = path.parent.resolve()
+        config._yaml_data = data
         return config
 
     def apply_env_overrides(self) -> None:
-        """Override fields from environment variables (mutates in place)."""
-        if os.getenv("BRIDGE_URL"):
+        """Fill missing fields from environment variables (mutates in place).
+
+        YAML has precedence. Environment variables are only used when the
+        corresponding YAML key is absent or empty.
+        """
+        if os.getenv("BRIDGE_URL") and not self._yaml_has("bridge", "url"):
             self.bridge.url = os.environ["BRIDGE_URL"]
-        if os.getenv("BRIDGE_SECRET"):
+        if os.getenv("BRIDGE_SECRET") and not self._yaml_has("bridge", "shared_secret"):
             self.bridge.shared_secret = os.environ["BRIDGE_SECRET"]
+
+        if not self._yaml_has("llm", "api_key"):
+            provider = self.llm.provider
+            if provider == "anthropic" and os.getenv("ANTHROPIC_API_KEY"):
+                self.llm.api_key = os.environ["ANTHROPIC_API_KEY"]
+            elif provider == "openai" and os.getenv("OPENAI_API_KEY"):
+                self.llm.api_key = os.environ["OPENAI_API_KEY"]
+            elif provider == "deepseek" and os.getenv("DEEPSEEK_API_KEY"):
+                self.llm.api_key = os.environ["DEEPSEEK_API_KEY"]
+            elif not self._yaml_has("llm", "provider"):
+                self._fill_llm_from_any_env_provider()
+
+        if os.getenv("LLM_API_BASE") and not self._yaml_has("llm", "api_base"):
+            self.llm.api_base = os.environ["LLM_API_BASE"]
+        elif self.llm.provider == "deepseek" and not self._yaml_has("llm", "api_base") and self.llm.api_key:
+            self.llm.api_base = "https://api.deepseek.com"
+
+        if os.getenv("LLM_MODEL") and not self._yaml_has("llm", "model"):
+            self.llm.model = os.environ["LLM_MODEL"]
+        if os.getenv("LOG_LEVEL") and not self._yaml_has("log_level"):
+            self.log_level = os.environ["LOG_LEVEL"]
+
+    def _yaml_has(self, *path: str) -> bool:
+        node = self._yaml_data
+        for key in path:
+            if not isinstance(node, dict) or key not in node:
+                return False
+            node = node[key]
+        return node not in (None, "")
+
+    def _fill_llm_from_any_env_provider(self) -> None:
         if os.getenv("ANTHROPIC_API_KEY"):
             self.llm.api_key = os.environ["ANTHROPIC_API_KEY"]
             self.llm.provider = "anthropic"
-        if os.getenv("OPENAI_API_KEY"):
+        elif os.getenv("OPENAI_API_KEY"):
             self.llm.api_key = os.environ["OPENAI_API_KEY"]
             self.llm.provider = "openai"
-        if os.getenv("DEEPSEEK_API_KEY"):
+        elif os.getenv("DEEPSEEK_API_KEY"):
             self.llm.api_key = os.environ["DEEPSEEK_API_KEY"]
             self.llm.provider = "deepseek"
-            if not os.getenv("LLM_API_BASE") and "api_base" not in os.environ:
-                self.llm.api_base = "https://api.deepseek.com"
-        if os.getenv("LLM_API_BASE"):
-            self.llm.api_base = os.environ["LLM_API_BASE"]
-        if os.getenv("LLM_MODEL"):
-            self.llm.model = os.environ["LLM_MODEL"]
-        if os.getenv("LOG_LEVEL"):
-            self.log_level = os.environ["LOG_LEVEL"]
 
     def get_system_prompt_path(self) -> str:
         """Resolve path to the shared system prompt."""

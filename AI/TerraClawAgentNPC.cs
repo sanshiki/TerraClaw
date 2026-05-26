@@ -93,6 +93,7 @@ public class TerraClawAgentNPC : ModNPC
             if (npc.ModNPC is TerraClawAgentNPC agentNpc && agent != null)
             {
                 agentNpc.Agent = agent;
+                agent.LlmAgentId = string.IsNullOrWhiteSpace(agent.LlmAgentId) ? Guid.NewGuid().ToString() : agent.LlmAgentId;
                 agent.BindTo(npc);
             }
         }

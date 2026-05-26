@@ -1,200 +1,165 @@
 using Microsoft.Xna.Framework;
-using TerraClaw.Util;
+using System.Collections.Generic;
+using System.Text.Json.Nodes;
 using Terraria;
-using Terraria.ID;
+using TerraClaw.LLM;
+using TerraClaw.Util;
 
 namespace TerraClaw.AI;
 
 /// <summary>
-/// Example BridgeAgent subclass — demonstrates how to override atomic action implementations.
-/// This is the default agent used for "terraclaw" in the factory.
+/// Example agent using the C#-first LLM framework.
+/// The LLM returns structured JSON; local C# AI decides how to apply it.
 /// </summary>
-public class ExampleTerraClawAgent : BridgeAgent
+public class ExampleTerraClawAgent : TerraClawAgent, IPlayerInstructionReceiver
 {
-    public ExampleTerraClawAgent(string agentId, string connectionId, string agentName = "terraclaw")
-        : base(agentId, connectionId, agentName) { }
+    private const float Inertia = 20f;
+    private const int HeartbeatCooldownTicks = 60 * 20;
+    private const int PlayerInstructionCooldownTicks = 60 * 5;
+    private LlmRequestHandle? _llm;
+    private Vector2? _moveTarget;
+    private string _state = "idle";
+    private int _nextRequestTick;
+    private int _nextPlayerInstructionTick;
+    private readonly Queue<string> _playerInstructions = new();
+    private string _activePlayerInstruction = "";
 
-    /// <summary>Parameterless constructor for standalone NPC spawn (no bridge).</summary>
-    public ExampleTerraClawAgent() : base("", "", "terraclaw") { }
-
-    private const float INERTIA = 20f;
-
-    // ── Atomic action implementations ──────────────────────────
-
-    protected override AgentActionResult ExecuteMoveTo(PendingAgentAction action, int elapsedTicks)
+    public ExampleTerraClawAgent(string agentId = "", string connectionId = "", string agentName = "terraclaw")
     {
-        float x = (float)action.GetParam("x", 0.0);
-        float y = (float)action.GetParam("y", 0.0);
-        float speed = (float)action.GetParam("speed", 4.0);
-        float arrivalRadius = (float)action.GetParam("arrival_radius", 16.0);
+        if (!string.IsNullOrWhiteSpace(agentId))
+            LlmAgentId = agentId;
+    }
 
-        var target = new Vector2(x, y);
+    public override void Initialize()
+    {
+        NPC.noTileCollide = true;
+        NPC.noGravity = true;
+        NPC.damage = 0;
+        NPC.friendly = true;
+        NPC.life = 9999;
+        NPC.lifeMax = 9999;
+        NPC.hide = false;
+        NPC.chaseable = true;
+    }
+
+    public override void AI()
+    {
+        if (!IsActive)
+            return;
+
+        ApplyMovement();
+        PollLlm();
+
+        if (_llm == null || _llm.IsDone)
+        {
+            if (_playerInstructions.Count > 0 && Main.GameUpdateCount >= _nextPlayerInstructionTick)
+            {
+                _activePlayerInstruction = _playerInstructions.Dequeue();
+                _llm = RequestLlm(
+                    BuildObservation(),
+                    BuildOutputContract(),
+                    $"The player sent this /agent instruction: {_activePlayerInstruction}. Respond or act on it.",
+                    timeoutMs: 30000);
+                _nextPlayerInstructionTick = (int)Main.GameUpdateCount + PlayerInstructionCooldownTicks;
+                _nextRequestTick = (int)Main.GameUpdateCount + HeartbeatCooldownTicks;
+            }
+            else if (Main.GameUpdateCount >= _nextRequestTick)
+            {
+                _activePlayerInstruction = "";
+                _llm = RequestLlm(
+                    BuildObservation(),
+                    BuildOutputContract(),
+                    "Heartbeat check: choose the NPC assistant's next small behavior. Prefer talk for status, move_to for repositioning, or set_state for local state.",
+                    timeoutMs: 30000);
+                _nextRequestTick = (int)Main.GameUpdateCount + HeartbeatCooldownTicks;
+            }
+        }
+    }
+
+    public void ReceivePlayerInstruction(string playerName, string instruction)
+    {
+        if (string.IsNullOrWhiteSpace(instruction))
+            return;
+        _playerInstructions.Enqueue($"{playerName}: {instruction}");
+    }
+
+    private LlmObservation BuildObservation()
+    {
+        return LlmObservation.Create()
+            .With(NpcContexts.Basic(NPC))
+            .With(WorldContexts.Basic(NPC.Center))
+            .With(WorldContexts.Spatial(NPC.Center, 10))
+            .With("state", _state)
+            .With("has_move_target", _moveTarget.HasValue)
+            .With("active_player_instruction", _activePlayerInstruction)
+            .With("queued_player_instruction_count", _playerInstructions.Count);
+    }
+
+    private static LlmOutput BuildOutputContract()
+    {
+        return LlmOutput.OneOf(
+            LlmOutput.Object("talk", "Say a short in-game message.")
+                .String("text", required: true, maxLength: 80),
+            LlmOutput.Object("move_to", "Move toward a world-space target.")
+                .Number("x", required: true)
+                .Number("y", required: true)
+                .Number("speed", defaultValue: 4.0),
+            LlmOutput.Object("set_state", "Update the local behavior state.")
+                .String("state", required: true, maxLength: 40)
+        );
+    }
+
+    private void PollLlm()
+    {
+        if (_llm == null || !_llm.TryGetResult(out JsonNode? output) || output is not JsonObject obj)
+            return;
+
+        string type = obj["type"]?.GetValue<string>() ?? "";
+        switch (type)
+        {
+            case "talk":
+                Say(obj["text"]?.GetValue<string>() ?? "");
+                break;
+            case "move_to":
+                float x = (float)(obj["x"]?.GetValue<double>() ?? NPC.Center.X);
+                float y = (float)(obj["y"]?.GetValue<double>() ?? NPC.Center.Y);
+                _moveTarget = new Vector2(x, y);
+                _state = "moving";
+                break;
+            case "set_state":
+                _state = obj["state"]?.GetValue<string>() ?? _state;
+                break;
+        }
+
+        _llm = null;
+    }
+
+    private void ApplyMovement()
+    {
+        if (!_moveTarget.HasValue)
+            return;
+
+        var target = _moveTarget.Value;
         float dist = Vector2.Distance(NPC.Center, target);
-
-        if (dist <= arrivalRadius)
+        if (dist <= 16f)
         {
-            return AgentActionResult.Done(new
-            {
-                position = new { x = NPC.Center.X, y = NPC.Center.Y },
-                distance_remaining = dist,
-            });
+            NPC.velocity = Vector2.Zero;
+            _moveTarget = null;
+            _state = "idle";
+            return;
         }
 
-
-
-        var dir = target - NPC.Center;
-        
-        NPC.velocity = AIHelper.HomeinToTarget(NPC.Center, NPC.velocity, target, speed, INERTIA);
-
-        NPC.direction = dir.X > 0 ? 1 : -1;
-
-        return null;
+        NPC.velocity = AIHelper.HomeinToTarget(NPC.Center, NPC.velocity, target, 4f, Inertia);
+        NPC.direction = target.X > NPC.Center.X ? 1 : -1;
     }
 
-    protected override AgentActionResult ExecutePlaceTile(PendingAgentAction action)
+    private void Say(string text)
     {
-        int tx = (int)action.GetParam("tx", -1.0);
-        int ty = (int)action.GetParam("ty", -1.0);
-        int tileType = (int)action.GetParam("tile_type", (double)TileID.Dirt);
-        int style = (int)action.GetParam("style", 0.0);
-
-        if (tx < 0 || ty < 0)
-            return AgentActionResult.Failed("INVALID_PARAMS", "tx and ty required");
-
-        bool ok = PlaceTile(tx, ty, tileType, style);
-        return new AgentActionResult
-        {
-            Success = ok,
-            Data = new { tile_placed = ok, position = new { x = tx, y = ty }, tile_type = tileType },
-        };
-    }
-
-    protected override AgentActionResult ExecutePlaceWall(PendingAgentAction action)
-    {
-        int tx = (int)action.GetParam("tx", -1.0);
-        int ty = (int)action.GetParam("ty", -1.0);
-        int wallType = (int)action.GetParam("wall_type", (double)WallID.Glass);
-
-        if (tx < 0 || ty < 0)
-            return AgentActionResult.Failed("INVALID_PARAMS", "tx and ty required");
-
-        bool ok = PlaceWall(tx, ty, wallType);
-        return new AgentActionResult
-        {
-            Success = ok,
-            Data = new { wall_placed = ok, position = new { x = tx, y = ty }, wall_type = wallType },
-        };
-    }
-
-
-    private int bounceBackCnt = 0;
-    private bool bounceBack = false;
-    private AgentActionResult tileBreakingResult = null;
-    protected override AgentActionResult ExecuteBreakTile(PendingAgentAction action)
-    {
-        int tx = (int)action.GetParam("tx", -1.0);
-        int ty = (int)action.GetParam("ty", -1.0);
-
-        AgentActionResult result = null;
-
-        if (tx < 0 || ty < 0)
-            return AgentActionResult.Failed("INVALID_PARAMS", "tx and ty required");
-
-        if (tx >= Main.maxTilesX || ty >= Main.maxTilesY)
-            return AgentActionResult.Failed("INVALID_PARAMS", "tx or ty out of bounds");
-
-        // var tile = Main.tile[tx, ty];
-        // if (tile == null || !tile.HasTile)
-        //     return AgentActionResult.Failed("INVALID_PARAMS", "No tile to break at specified coordinates");
-
-        Vector2 dist = new Vector2(tx * 16 + 8, ty * 16 + 8) - NPC.Center;
-        Vector2 dir = dist;
-        if(dir != Vector2.Zero)
-            dir.Normalize();
-        else dir = new Vector2(0, -1);
-
-        if(bounceBack)
-        {
-            bounceBackCnt++;
-            if(bounceBackCnt > 30)
-            {
-                bounceBack = false;
-                bounceBackCnt = 0;
-                result = tileBreakingResult;
-                tileBreakingResult = null;
-            }
-        }
-        else
-        {
-            // the closer to the tile, the faster to move
-            NPC.velocity = dir * MathHelper.Clamp(0, 10f, 10f / (dist.Length()+0.01f));
-            if(dist.Length() < 16)
-            {
-                // break the tile and bounce back
-                NPC.velocity = -NPC.velocity * 0.6f;
-                bounceBack = true;
-                bool ok = BreakTile(tx, ty);
-                tileBreakingResult = new AgentActionResult
-                {
-                    Success = ok,
-                    Data = new { tile_broken = ok, position = new { x = tx, y = ty } },
-                };
-            }
-        }
-
-        return result;
-    }
-
-    protected override AgentActionResult ExecuteBreakWall(PendingAgentAction action)
-    {
-        int tx = (int)action.GetParam("tx", -1.0);
-        int ty = (int)action.GetParam("ty", -1.0);
-
-        if (tx < 0 || ty < 0)
-            return AgentActionResult.Failed("INVALID_PARAMS", "tx and ty required");
-
-        bool ok = BreakWall(tx, ty);
-        return new AgentActionResult
-        {
-            Success = ok,
-            Data = new { wall_broken = ok, position = new { x = tx, y = ty } },
-        };
-    }
-
-    protected override AgentActionResult ExecuteWait(PendingAgentAction action, int elapsedTicks)
-    {
-        int durationMs = (int)action.GetParam("duration_ms", 1000.0);
-        int elapsedMs = (int)(elapsedTicks * (1000.0 / 60.0));
-
-        if (elapsedMs >= durationMs)
-            return AgentActionResult.Done(new { waited_ms = elapsedMs });
-
-        return null;
-    }
-
-    protected override AgentActionResult ExecuteTeleport(PendingAgentAction action)
-    {
-        float x = (float)action.GetParam("x", 0.0);
-        float y = (float)action.GetParam("y", 0.0);
-        Teleport(new Vector2(x, y));
-        return AgentActionResult.Done(new { position = new { x, y } });
-    }
-
-    protected override AgentActionResult ExecuteTalk(PendingAgentAction action)
-    {
-        string text = action.GetStringParam("text", "");
-        if (string.IsNullOrEmpty(text))
-            return AgentActionResult.Failed("INVALID_PARAMS", "text is required");
-
+        if (string.IsNullOrWhiteSpace(text))
+            return;
         if (text.Length > 80)
             text = text[..80];
-
         Main.NewText($"<{NPC.FullName}> {text}", 200, 200, 100);
         CombatText.NewText(NPC.Hitbox, Color.Gold, text);
-
-        return AgentActionResult.Done(new { said = text, truncated = text.Length > 80 });
     }
-
-    protected override AgentActionResult? ExecuteScanArea(PendingAgentAction action)
-        => base.ExecuteScanArea(action);
 }

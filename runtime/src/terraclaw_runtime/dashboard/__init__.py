@@ -42,7 +42,7 @@ class LiveDashboard:
             await ws.accept()
             self._websockets.add(ws)
             # Send catch-up: latest turn count
-            await ws.send_json({"type": "hello", "turn": self._turn_counter})
+            await ws.send_json({"type": "hello", "data": {"turn": self._turn_counter}})
             try:
                 while True:
                     msg = await ws.receive_text()
