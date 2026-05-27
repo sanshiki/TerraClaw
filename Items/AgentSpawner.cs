@@ -5,6 +5,7 @@ using Terraria.ModLoader;
 
 namespace TerraClaw.Items;
 
+/// <summary>Debug item that spawns the minimal TerraClaw example agent at the mouse position.</summary>
 public class AgentSpawner : ModItem
 {
     public override void SetDefaults()

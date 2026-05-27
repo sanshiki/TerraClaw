@@ -11,14 +11,17 @@ namespace TerraClaw.Core;
 /// </summary>
 public class AgentChatCommand : ModCommand
 {
+    /// <summary>Chat command name without the leading slash.</summary>
     public override string Command => "agent";
 
+    /// <summary>Registers this as an in-game chat command.</summary>
     public override CommandType Type => CommandType.Chat;
 
     public override string Usage => "/agent <instruction>";
 
     public override string Description => "Send an instruction to the TerraClaw NPC agent";
 
+    /// <summary>Broadcasts player text to the runtime and directly delivers it to in-game instruction receivers.</summary>
     public override void Action(CommandCaller caller, string input, string[] args)
     {
         if (args.Length == 0)

@@ -9,8 +9,12 @@ using TerraClaw.Network;
 
 namespace TerraClaw.LLM;
 
+/// <summary>
+/// tModLoader system that sends non-blocking LLM requests to the Python runtime and routes responses back to handles.
+/// </summary>
 public sealed class LlmBridgeSystem : ModSystem
 {
+    /// <summary>Current loaded bridge instance, or null before the mod system is loaded.</summary>
     public static LlmBridgeSystem? Instance { get; private set; }
 
     private readonly Dictionary<string, LlmRequestHandle> _pending = new();
@@ -45,6 +49,10 @@ public sealed class LlmBridgeSystem : ModSystem
         }
     }
 
+    /// <summary>
+    /// Sends an LLM request unless the same agent already has a pending request.
+    /// Returns a handle that callers can poll from AI hooks without blocking the game loop.
+    /// </summary>
     public LlmRequestHandle Request(
         string agentId,
         string system,
@@ -77,6 +85,7 @@ public sealed class LlmBridgeSystem : ModSystem
         return handle;
     }
 
+    /// <summary>Cancels a pending request and notifies the Python runtime.</summary>
     public void Cancel(string requestId)
     {
         var payload = new JsonObject { ["request_id"] = requestId };
@@ -84,6 +93,7 @@ public sealed class LlmBridgeSystem : ModSystem
         _pending.Remove(requestId);
     }
 
+    /// <summary>Applies an <c>llm.response</c> payload received from the bridge network layer.</summary>
     public void HandleResponse(JsonElement payload)
     {
         string requestId = payload.TryGetProperty("request_id", out var rid) ? rid.GetString() ?? "" : "";

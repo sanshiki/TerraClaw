@@ -26,6 +26,7 @@ public abstract class TerraClawAgent
     /// <summary>Called when the NPC is killed or the agent is removed.</summary>
     public virtual void OnKill() => IsActive = false;
 
+    /// <summary>Binds this agent instance to a Terraria NPC and runs initialization.</summary>
     public void BindTo(NPC npc)
     {
         NPC = npc;
@@ -132,6 +133,9 @@ public abstract class TerraClawAgent
     /// <summary>Convert world-space position to tile coordinates.</summary>
     protected static (int x, int y) WorldToTile(Vector2 pos) => ((int)(pos.X / 16), (int)(pos.Y / 16));
 
+    /// <summary>
+    /// Sends a non-blocking LLM request for this agent and returns a handle that can be polled from AI().
+    /// </summary>
     protected LlmRequestHandle RequestLlm(
         LlmObservation observation,
         LlmOutput output,

@@ -6,6 +6,7 @@ using System.Text.Json;
 using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.ModLoader;
+using TerraClaw.Agents.TerraClaw;
 using TerraClaw.AI;
 using TerraClaw.Event;
 using TerraClaw.Network;
@@ -13,19 +14,32 @@ using TerraClaw.Observation;
 
 namespace TerraClaw.Core;
 
+/// <summary>
+/// Main bridge mod system.
+/// Owns the WebSocket server, legacy bridge agents, observation collector, and /agent instruction delivery.
+/// </summary>
 public class BridgeModSystem : ModSystem
 {
+    /// <summary>Current loaded bridge system instance.</summary>
     public static BridgeModSystem Instance { get; private set; } = null!;
 
+    /// <summary>WebSocket server used by the Python runtime and dashboard bridge.</summary>
     public WebSocketServer WebSocketServer { get; private set; } = null!;
+
+    /// <summary>Legacy observation collector used by Python-driven bridge agents.</summary>
     public ObservationCollector Collector { get; private set; } = null!;
+
+    /// <summary>Global event bus used by legacy observation/event messages.</summary>
     public EventBus EventBus { get; private set; } = null!;
+
+    /// <summary>Bridge runtime configuration.</summary>
     public BridgeConfig Config { get; private set; } = null!;
 
     private readonly Dictionary<string, TerraClawAgent> _agents = new();
     private readonly Dictionary<string, string> _connectionToAgentId = new();
     private int _tickCounter;
 
+    /// <summary>Optional spawn position consumed by legacy agent.register requests.</summary>
     public static Vector2? PendingSpawnPosition { get; set; }
 
     // Pending agent registrations queued from WebSocket thread, processed on main thread
@@ -111,6 +125,9 @@ public class BridgeModSystem : ModSystem
         };
     }
 
+    /// <summary>
+    /// Delivers /agent chat text to all active in-game agents that implement <see cref="IPlayerInstructionReceiver"/>.
+    /// </summary>
     public int DeliverPlayerInstruction(string playerName, string instruction)
     {
         int delivered = 0;
@@ -185,6 +202,7 @@ public class BridgeModSystem : ModSystem
 
     // ── Agent message handlers ─────────────────────────────────
 
+    /// <summary>Handles a legacy runtime request to spawn and bind a bridge agent.</summary>
     public void HandleAgentRegister(BridgeConnection conn, JsonElement payload)
     {
         float x = 0, y = 0;
@@ -220,6 +238,7 @@ public class BridgeModSystem : ModSystem
         _pendingRegistrations.Enqueue((conn, x, y, agentName, observationRadius));
     }
 
+    /// <summary>Handles a legacy runtime action message for a bridge agent.</summary>
     public void HandleAgentAction(BridgeConnection conn, JsonElement payload)
     {
         string agentId;
@@ -289,6 +308,7 @@ public class BridgeModSystem : ModSystem
         conn.OutgoingQueue.Enqueue(ack);
     }
 
+    /// <summary>Handles legacy observation radius configuration for a bridge agent.</summary>
     public void HandleObservationConfigure(BridgeConnection conn, JsonElement payload)
     {
         if (!_connectionToAgentId.TryGetValue(conn.Id, out var agentId)
@@ -299,6 +319,7 @@ public class BridgeModSystem : ModSystem
             bridgeAgent.ObservationRadius = radius.GetInt32();
     }
 
+    /// <summary>Cancels all queued legacy bridge actions for the selected agent.</summary>
     public void HandleAgentActionCancel(BridgeConnection conn, JsonElement payload)
     {
         string agentId;
@@ -312,6 +333,7 @@ public class BridgeModSystem : ModSystem
             bridgeAgent.ClearQueue();
     }
 
+    /// <summary>Handles a legacy runtime request to remove a bridge agent.</summary>
     public void HandleAgentUnregister(BridgeConnection conn, JsonElement payload)
     {
         string agentId;
@@ -324,6 +346,7 @@ public class BridgeModSystem : ModSystem
         UnregisterAgent(agentId);
     }
 
+    /// <summary>Sends a legacy bridge action result back to the owning runtime connection.</summary>
     public void SendAgentActionResult(string agentId, string connectionId,
         string actionId, AgentActionResult result)
     {

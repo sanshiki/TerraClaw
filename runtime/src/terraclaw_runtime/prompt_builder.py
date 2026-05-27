@@ -26,7 +26,7 @@ class FlatSymbolicPromptBuilder:
 
         system_prompt = "\n\n".join(part for part in [
             system.strip(),
-            "Return only a single JSON object matching the output contract. Do not wrap it in markdown.",
+            _format_return_rule(output_contract),
             _format_observation_legend(legend, docs, conventions),
             _format_output_contract(output_contract),
         ] if part)
@@ -81,6 +81,14 @@ def _format_output_contract(output_contract: dict[str, Any]) -> str:
     if isinstance(flat, dict) and flat.get("choices"):
         return _format_output_flat(flat)
     return _format_output_legend(output_contract.get("legend", []))
+
+
+def _format_return_rule(output_contract: dict[str, Any]) -> str:
+    flat = output_contract.get("flat")
+    mode = flat.get("mode") if isinstance(flat, dict) else None
+    if mode == "any":
+        return "Return only JSON matching the output contract. For multiple outputs, return an array of JSON objects. Do not wrap it in markdown."
+    return "Return only a single JSON object matching the output contract. Do not wrap it in markdown."
 
 
 def _contract_payload_for_user(output_contract: dict[str, Any]) -> str:

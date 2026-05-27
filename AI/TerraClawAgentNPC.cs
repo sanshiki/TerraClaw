@@ -3,6 +3,7 @@ using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.ID;
 using Terraria.ModLoader;
+using TerraClaw.Agents.TerraClaw;
 
 namespace TerraClaw.AI;
 

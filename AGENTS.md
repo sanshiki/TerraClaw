@@ -2,31 +2,37 @@
 
 ## Project Structure & Module Organization
 
-TerraClaw is split between a C# tModLoader bridge mod and a Python agent runtime. The mod entry point is `TerraClaw.cs`; bridge systems live in `Core/`, WebSocket transport in `Network/`, game state extraction in `Observation/`, agents in `AI/`, items/textures in `Items/`, skills in `Skill/`, and utilities in `Util/`. JSON contracts are in `protocol/schemas/`. The Python runtime is under `runtime/src/terraclaw_runtime/`, with config in `runtime/config/`, agent definitions in `runtime/agents/`, web UI files in `runtime/webui/`, and tests in `runtime/tests/`.
+TerraClaw is now a C#-first tModLoader LLM framework. Agent implementations live under `Agents/<AgentName>/`; agent-specific providers may live under `Agents/<AgentName>/Providers/` when reusable components are not enough. Shared C# framework code is in `AI/` and `LLM/`, bridge systems are in `Core/` and `Network/`, reusable extraction helpers are in `Observation/`, and utilities are in `Util/`. The Python worker is under `runtime/src/terraclaw_runtime/`; tests are in `runtime/tests/`; dashboard UI is in `runtime/dashboard/`.
+
+Legacy Python-driven files remain under `runtime/src/terraclaw_runtime/agent/`, `runtime/agents/`, and `AI/BridgeAgent.cs`. Treat these as deprecated unless explicitly working on compatibility.
 
 ## Build, Test, and Development Commands
 
-- `dotnet build TerraClaw.csproj -c Release`: builds the tModLoader mod with .NET 8.
-- `dotnet build TerraClaw.csproj`: faster debug build during mod development.
-- `cd runtime; pip install -e .[dev]`: installs the Python runtime and developer tools.
-- `cd runtime; pytest`: runs Python tests configured by `runtime/pyproject.toml`.
-- `cd runtime; ruff check .`: lints Python code using the repo's Ruff settings.
-- `cd runtime; mypy src`: type-checks the Python runtime in strict mode.
+- Compile C# only inside tModLoader using Build + Reload. Do not use `dotnet build` for validation.
+- `cd runtime; pip install -e .[dev]`: installs Python runtime and developer tools.
+- `cd runtime; pytest`: runs Python tests.
+- `cd runtime; ruff check .`: lints Python code.
+- `cd runtime; mypy src`: type-checks Python code.
+- `cd runtime; python -m terraclaw_runtime.orchestrator`: starts the Python LLM worker.
 
-Run Terraria through tModLoader for in-game checks. The bridge listens on `ws://127.0.0.1:9777/bridge`.
+The bridge listens on `ws://127.0.0.1:9777/bridge`; the dashboard is at `http://127.0.0.1:9090`.
 
 ## Coding Style & Naming Conventions
 
-C# targets `net8.0` with nullable reference types and implicit usings enabled. Use 4-space indentation, PascalCase for public types/methods, camelCase for locals/parameters, and keep namespaces aligned with top-level folders. Python requires 3.12+, uses Ruff with a 110-character line length, and mypy strict mode; prefer typed functions, snake_case modules/functions, and PascalCase classes.
+C# targets tModLoader/.NET 8 with nullable reference types and implicit usings enabled. Use 4-space indentation, PascalCase for public types/methods, and camelCase for locals/parameters. Keep agent namespaces aligned with folders, e.g. `TerraClaw.Agents.Guide`. Python requires 3.12+, uses Ruff with 110-character lines, and prefers typed functions.
+
+## Agent Framework Guidelines
+
+New agents should use `LlmBridgeSystem`, `LlmObservation`, `LlmOutput`, and `LlmRequestHandle`. Prefer reusable observation components such as `TerrariaContext.Npc(npc).Basic().Life()`, `TerrariaContext.World().Time()`, and `Context.Custom("mind").Field(...)`; implement `ISymbolicContextProvider` only for custom collection logic. Keep scheduling in C# via heartbeat timers, state-signature changes, player commands, or tModLoader hooks. Never block in `AI()` or hooks; send a request and poll the handle later. See `docs/CSHARP_AGENT_API.md`.
 
 ## Testing Guidelines
 
-Current automated coverage is minimal; `runtime/tests/` contains only scaffolding. Add Python tests as `test_*.py` files, especially for message parsing, memory, skills, recovery monitors, and bridge client behavior. For C# changes, verify with `dotnet build` and in-game tModLoader testing. When schemas change, update serializers, runtime message models, and tests together.
+For C# changes, compile in tModLoader and test in-game. Paste compiler errors back into the task when needed. For Python changes, run `pytest`; add focused tests under `runtime/tests/` for prompt formatting, worker behavior, and message handling.
 
 ## Commit & Pull Request Guidelines
 
-Recent commits use short, imperative, lowercase summaries such as `reorganize observation, add scan action` and `complete memory, add dashboard`. Keep commits focused on one change area. Pull requests should include a concise description, affected areas (`Core`, `Network`, `runtime`, `protocol`, etc.), test/build commands run, linked issues when relevant, and screenshots or logs for UI, dashboard, or in-game behavior changes.
+Recent commits use short, imperative, lowercase summaries such as `reorganize observation, add scan action`. Keep commits focused. PRs should include affected areas (`Agents`, `LLM`, `runtime`, etc.), tModLoader compile status, Python test commands run, and screenshots/logs for dashboard or in-game behavior.
 
 ## Security & Configuration Tips
 
-Do not commit API keys, local secrets, generated databases, or personal runtime config. Use `runtime/config/config.yaml.example` as the template for local configuration. Treat `runtime/data/memory.db`, `bin/`, `obj/`, and local tModLoader outputs as generated artifacts unless a change is intentional.
+Do not commit API keys, local secrets, generated databases, or personal runtime config. Use `runtime/config/config.yaml.example` as the template. YAML config has precedence; environment variables only fill missing values.

@@ -131,7 +131,7 @@ class LlmWorker:
         finally:
             self._tasks.pop(request_id, None)
 
-    async def _call_llm(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _call_llm(self, payload: dict[str, Any]) -> Any:
         system = payload.get("system") or "Return only JSON matching the provided output contract."
         instruction = payload.get("instruction", "")
         observation = payload.get("observation", {})
@@ -155,8 +155,8 @@ class LlmWorker:
         if text.startswith("```"):
             text = _strip_code_fence(text)
         parsed = json.loads(text)
-        if not isinstance(parsed, dict):
-            raise ValueError("LLM output must be a JSON object")
+        if not isinstance(parsed, (dict, list)):
+            raise ValueError("LLM output must be a JSON object or array")
         return parsed
 
     @staticmethod

@@ -6,6 +6,10 @@ using System.Text.Json.Nodes;
 
 namespace TerraClaw.LLM;
 
+/// <summary>
+/// Legacy generic NPC provider kept for compatibility.
+/// New code should prefer <see cref="TerrariaContext.Npc(NPC)"/> components.
+/// </summary>
 public sealed class NpcBasicContextProvider : ISymbolicContextProvider
 {
     private readonly NPC _npc;
@@ -64,6 +68,10 @@ public sealed class NpcBasicContextProvider : ISymbolicContextProvider
     };
 }
 
+/// <summary>
+/// Legacy generic world provider kept for compatibility.
+/// New code should prefer <see cref="TerrariaContext.World"/> components.
+/// </summary>
 public sealed class WorldContextProvider : ISymbolicContextProvider
 {
     private readonly Vector2 _center;
@@ -105,6 +113,10 @@ public sealed class WorldContextProvider : ISymbolicContextProvider
     };
 }
 
+/// <summary>
+/// Legacy spatial-window provider that exposes compressed nearby tile maps.
+/// Use this directly when an agent needs terrain maps in addition to standard components.
+/// </summary>
 public sealed class SpatialContextProvider : ISymbolicContextProvider
 {
     private readonly SpatialWindowExtractor _extractor = new();
@@ -145,14 +157,20 @@ public sealed class SpatialContextProvider : ISymbolicContextProvider
     }
 }
 
+/// <summary>Legacy factory helpers for NPC context providers.</summary>
 public static class NpcContexts
 {
+    /// <summary>Creates the legacy basic NPC context provider.</summary>
     public static IContextProvider Basic(NPC npc) => new NpcBasicContextProvider(npc);
 }
 
+/// <summary>Legacy factory helpers for world and spatial context providers.</summary>
 public static class WorldContexts
 {
+    /// <summary>Creates the legacy basic world context provider.</summary>
     public static IContextProvider Basic(Vector2 center) => new WorldContextProvider(center);
+
+    /// <summary>Creates the legacy compressed spatial-window context provider.</summary>
     public static IContextProvider Spatial(Vector2 center, int radius) => new SpatialContextProvider(center, radius);
 }
 
