@@ -16,6 +16,14 @@ public class ExampleTerraClawAgent : TerraClawAgent, IPlayerInstructionReceiver
     private const float Inertia = 20f;
     private const int HeartbeatCooldownTicks = 60 * 20;
     private const int PlayerInstructionCooldownTicks = 60 * 5;
+    private const string SystemPrompt =
+        "You are an AI controller inside Terraria. Return only JSON matching the requested output contract.\n\n" +
+        "Terraria coordinate system:\n" +
+        "- World positions are measured in pixels as [x,y].\n" +
+        "- Tile positions are integer grid coordinates: tile_x = pixel_x / 16, tile_y = pixel_y / 16.\n" +
+        "- X increases to the right.\n" +
+        "- Y increases downward.\n" +
+        "- The NPC can fly through terrain and is controlled by local C# logic after you return a structured action.";
     private LlmRequestHandle? _llm;
     private Vector2? _moveTarget;
     private string _state = "idle";
@@ -59,6 +67,7 @@ public class ExampleTerraClawAgent : TerraClawAgent, IPlayerInstructionReceiver
                     BuildObservation(),
                     BuildOutputContract(),
                     $"The player sent this /agent instruction: {_activePlayerInstruction}. Respond or act on it.",
+                    system: SystemPrompt,
                     timeoutMs: 30000);
                 _nextPlayerInstructionTick = (int)Main.GameUpdateCount + PlayerInstructionCooldownTicks;
                 _nextRequestTick = (int)Main.GameUpdateCount + HeartbeatCooldownTicks;
@@ -70,6 +79,7 @@ public class ExampleTerraClawAgent : TerraClawAgent, IPlayerInstructionReceiver
                     BuildObservation(),
                     BuildOutputContract(),
                     "Heartbeat check: choose the NPC assistant's next small behavior. Prefer talk for status, move_to for repositioning, or set_state for local state.",
+                    system: SystemPrompt,
                     timeoutMs: 30000);
                 _nextRequestTick = (int)Main.GameUpdateCount + HeartbeatCooldownTicks;
             }

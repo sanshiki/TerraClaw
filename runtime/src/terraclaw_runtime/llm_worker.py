@@ -16,6 +16,7 @@ import structlog
 
 from terraclaw_runtime.agent.llm import LLMClient
 from terraclaw_runtime.bridge.client import BridgeClient
+from terraclaw_runtime.prompt_builder import FlatSymbolicPromptBuilder
 
 logger = structlog.get_logger()
 
@@ -134,23 +135,19 @@ class LlmWorker:
         system = payload.get("system") or "Return only JSON matching the provided output contract."
         instruction = payload.get("instruction", "")
         observation = payload.get("observation", {})
+        symbolic_observation = payload.get("symbolic_observation")
         output_contract = payload.get("output_contract", {})
 
-        messages = [{
-            "role": "user",
-            "content": (
-                "Instruction:\n"
-                f"{instruction}\n\n"
-                "Observation JSON:\n"
-                f"{json.dumps(observation, ensure_ascii=False)}\n\n"
-                "Output contract JSON Schema:\n"
-                f"{json.dumps(output_contract.get('schema', output_contract), ensure_ascii=False)}\n\n"
-                "Return only a single JSON object. Do not wrap it in markdown."
-            ),
-        }]
+        system_prompt, messages = FlatSymbolicPromptBuilder.build(
+            system=system,
+            instruction=instruction,
+            observation=observation,
+            symbolic_observation=symbolic_observation if isinstance(symbolic_observation, dict) else None,
+            output_contract=output_contract,
+        )
 
         result = await self._llm.generate(
-            system_prompt=system,
+            system_prompt=system_prompt,
             messages=messages,
             tools=[],
         )
@@ -165,6 +162,7 @@ class LlmWorker:
     @staticmethod
     def _dashboard_payload(payload: dict[str, Any], turn: int | None = None) -> dict[str, Any]:
         observation = payload.get("observation", {})
+        symbolic_observation = payload.get("symbolic_observation", {})
         contract = payload.get("output_contract", {})
         return {
             "turn": turn,
@@ -173,6 +171,7 @@ class LlmWorker:
             "instruction": payload.get("instruction", ""),
             "timeout_ms": payload.get("timeout_ms", 30000),
             "observation": observation,
+            "symbolic_observation": symbolic_observation,
             "observation_keys": list(observation.keys()) if isinstance(observation, dict) else [],
             "output_contract": contract,
         }

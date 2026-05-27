@@ -256,8 +256,16 @@ function addLlmRequest(data) {
     <div class="turn-text">${escapeHtml(data.instruction || '(no instruction)')}</div>
     <div style="margin-bottom:8px;">${obsKeys}</div>
     <details>
+      <summary style="cursor:pointer;color:#7aa2f7;font-size:13px;">Flat Symbolic Observation</summary>
+      <div class="json-block">${escapeHtml(pretty(data.symbolic_observation))}</div>
+    </details>
+    <details>
       <summary style="cursor:pointer;color:#7aa2f7;font-size:13px;">Observation</summary>
       <div class="json-block">${escapeHtml(pretty(data.observation))}</div>
+    </details>
+    <details>
+      <summary style="cursor:pointer;color:#7aa2f7;font-size:13px;margin-top:8px;">Flat Output Contract</summary>
+      <div class="json-block">${escapeHtml(pretty(data.output_contract && data.output_contract.flat))}</div>
     </details>
     <details>
       <summary style="cursor:pointer;color:#7aa2f7;font-size:13px;margin-top:8px;">Output Contract</summary>

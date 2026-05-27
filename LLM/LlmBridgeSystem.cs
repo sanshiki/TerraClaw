@@ -68,6 +68,7 @@ public sealed class LlmBridgeSystem : ModSystem
             ["system"] = system,
             ["instruction"] = instruction,
             ["observation"] = observation.ToJson(),
+            ["symbolic_observation"] = observation.ToSymbolicJson(),
             ["output_contract"] = output.ToContractJson(),
             ["timeout_ms"] = timeoutMs,
         };
