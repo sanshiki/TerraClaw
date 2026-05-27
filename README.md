@@ -33,7 +33,6 @@ Agents/
       GuideContextProviders.cs
   TerraClaw/                     # Floating demo NPC agent
     ExampleTerraClawAgent.cs
-AI/                              # Shared agent host/base types
 LLM/                             # C# LLM request/contract framework
 Core/, Network/, Event/          # tModLoader bridge systems
 Observation/                     # Legacy/default spatial/entity extractors
@@ -124,7 +123,7 @@ See [C# Agent API](docs/CSHARP_AGENT_API.md) for implementation details and the 
 
 ### TerraClaw Demo Agent
 
-`Agents/TerraClaw/ExampleTerraClawAgent.cs` is a floating NPC demo using `TerraClawAgentNPC`. It accepts `/agent ...` instructions and can talk, move, or update local state based on LLM output.
+`Agents/TerraClaw/ExampleTerraClawAgent.cs` is a self-contained `ModNPC` demo. `AgentSpawner` spawns it directly, `/agent ...` sends it one instruction, and its `AI()` method sends a non-blocking LLM request, polls the result, and displays a short `talk` response.
 
 ## Legacy Systems
 
@@ -132,7 +131,6 @@ The following systems still exist but are **legacy/deprecated** relative to the 
 
 - `runtime/src/terraclaw_runtime/agent/loop.py`
 - `runtime/agents/terraclaw/actions.yaml`
-- `AI/BridgeAgent.cs`
 - `agent.register`, `agent.observation`, `agent.action`, `agent.action.result`
 - Python-side planning/memory/recovery/skills loop
 

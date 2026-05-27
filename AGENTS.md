@@ -2,9 +2,9 @@
 
 ## Project Structure & Module Organization
 
-TerraClaw is now a C#-first tModLoader LLM framework. Agent implementations live under `Agents/<AgentName>/`; agent-specific providers may live under `Agents/<AgentName>/Providers/` when reusable components are not enough. Shared C# framework code is in `AI/` and `LLM/`, bridge systems are in `Core/` and `Network/`, reusable extraction helpers are in `Observation/`, and utilities are in `Util/`. The Python worker is under `runtime/src/terraclaw_runtime/`; tests are in `runtime/tests/`; dashboard UI is in `runtime/dashboard/`.
+TerraClaw is now a C#-first tModLoader LLM framework. Agent implementations live under `Agents/<AgentName>/`; agent-specific providers may live under `Agents/<AgentName>/Providers/` when reusable components are not enough. Shared C# LLM framework code is in `LLM/`, bridge systems are in `Core/` and `Network/`, reusable extraction helpers are in `Observation/`, and utilities are in `Util/`. The Python worker is under `runtime/src/terraclaw_runtime/`; tests are in `runtime/tests/`; dashboard UI is in `runtime/dashboard/`.
 
-Legacy Python-driven files remain under `runtime/src/terraclaw_runtime/agent/`, `runtime/agents/`, and `AI/BridgeAgent.cs`. Treat these as deprecated unless explicitly working on compatibility.
+Legacy Python-driven files remain under `runtime/src/terraclaw_runtime/agent/` and `runtime/agents/`. Treat these as deprecated unless explicitly working on compatibility.
 
 ## Build, Test, and Development Commands
 
@@ -23,7 +23,7 @@ C# targets tModLoader/.NET 8 with nullable reference types and implicit usings e
 
 ## Agent Framework Guidelines
 
-New agents should use `LlmBridgeSystem`, `LlmObservation`, `LlmOutput`, and `LlmRequestHandle`. Prefer reusable observation components such as `TerrariaContext.Npc(npc).Basic().Life()`, `TerrariaContext.World().Time()`, and `Context.Custom("mind").Field(...)`; implement `ISymbolicContextProvider` only for custom collection logic. Keep scheduling in C# via heartbeat timers, state-signature changes, player commands, or tModLoader hooks. Never block in `AI()` or hooks; send a request and poll the handle later. See `docs/CSHARP_AGENT_API.md`.
+New agents should be normal `ModNPC`, `GlobalNPC`, `ModSystem`, or other tModLoader classes that call `LlmBridgeSystem` directly. Use `LlmObservation`, `LlmOutput`, and `LlmRequestHandle`. Prefer reusable observation components such as `TerrariaContext.Npc(npc).Basic().Life()`, `TerrariaContext.World().Time()`, and `Context.Custom("mind").Field(...)`; implement `ISymbolicContextProvider` only for custom collection logic. Keep scheduling in C# via heartbeat timers, state-signature changes, player commands, or tModLoader hooks. Never block in `AI()` or hooks; send a request and poll the handle later. See `docs/CSHARP_AGENT_API.md`.
 
 ## Testing Guidelines
 

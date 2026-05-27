@@ -2,6 +2,7 @@ using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.ID;
 using Terraria.ModLoader;
+using TerraClaw.Agents.TerraClaw;
 
 namespace TerraClaw.Items;
 
@@ -24,7 +25,7 @@ public class AgentSpawner : ModItem
         if (player.whoAmI == Main.myPlayer)
         {
             var worldPos = new Vector2(Main.MouseWorld.X, Main.MouseWorld.Y - 16);
-            AI.TerraClawAgentNPC.Spawn(worldPos, player.GetSource_ItemUse(Item));
+            ExampleTerraClawAgent.Spawn(worldPos, player.GetSource_ItemUse(Item));
             Main.NewText($"[AI] Spawned agent at ({worldPos.X:F0}, {worldPos.Y:F0})", 150, 255, 100);
         }
         return true;

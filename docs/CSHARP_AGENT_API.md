@@ -128,10 +128,10 @@ Agents/TerraClaw/ExampleTerraClawAgent.cs
 
 ### 2. Choose an Attachment Model
 
-Use `TerraClawAgent` when you own a spawned NPC:
+Use `ModNPC` when you own a spawned NPC:
 
 ```csharp
-public class MyAgent : TerraClawAgent {
+public sealed class MyAgentNpc : ModNPC {
     public override void AI() { ... }
 }
 ```
@@ -224,4 +224,4 @@ pytest
 
 ## Deprecated Path
 
-The older Python-driven `AgentLoop` plus `BridgeAgent` action queue is deprecated for new agents. It remains in the repo as reference code and for possible compatibility work.
+The older Python-driven `AgentLoop`, `agent.register`, and `agent.action` queue path is deprecated for new agents. New C# agents should implement behavior directly in tModLoader hooks and call `LlmBridgeSystem.Request`.
