@@ -37,6 +37,8 @@ class BridgeClient:
         self._tx_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=200)
         self._recv_task: asyncio.Task[None] | None = None
         self._send_task: asyncio.Task[None] | None = None
+        self._reconnect_task: asyncio.Task[None] | None = None
+        self._manual_disconnect = False
         self._last_send_time = 0.0
         self._pending: dict[str, asyncio.Future] = {}
         self._pending_lock: asyncio.Lock = asyncio.Lock()
@@ -53,10 +55,12 @@ class BridgeClient:
 
     async def connect(self) -> None:
         """Connect to the bridge and perform handshake."""
+        self._manual_disconnect = False
         delay = self._config.reconnect_base_delay_s
 
         while True:
             try:
+                await self._close_socket()
                 logger.info("connecting", url=self._config.url)
                 self._ws = await websockets.connect(
                     self._config.url,
@@ -99,24 +103,60 @@ class BridgeClient:
 
             except (OSError, ConnectionError, asyncio.TimeoutError) as e:
                 logger.warning("connection_failed", error=str(e), retry_delay_s=delay)
-                self._connected = False
+                await self._mark_disconnected()
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, self._config.reconnect_max_delay_s)
 
     async def disconnect(self) -> None:
         """Gracefully close the connection."""
+        self._manual_disconnect = True
         self._connected = False
-        for task in [self._recv_task, self._send_task]:
+        for task in [self._recv_task, self._send_task, self._reconnect_task]:
             if task and not task.done():
                 task.cancel()
                 try:
                     await task
                 except asyncio.CancelledError:
                     pass
-        if self._ws:
-            await self._ws.close()
-            self._ws = None
+        await self._close_socket()
         logger.info("disconnected")
+
+    async def _close_socket(self) -> None:
+        if self._ws:
+            try:
+                await self._ws.close()
+            except Exception:
+                pass
+            self._ws = None
+
+    async def _mark_disconnected(self) -> None:
+        self._connected = False
+        self._session_id = None
+        await self._close_socket()
+
+    def _schedule_reconnect(self) -> None:
+        if self._manual_disconnect:
+            return
+        if self._reconnect_task and not self._reconnect_task.done():
+            return
+        self._reconnect_task = asyncio.create_task(self._reconnect_loop())
+
+    async def _reconnect_loop(self) -> None:
+        async with self._pending_lock:
+            for action_id, future in list(self._pending.items()):
+                if not future.done():
+                    future.set_result({"status": "disconnected", "action_id": action_id})
+            self._pending.clear()
+
+        while not self._manual_disconnect and not self.connected:
+            try:
+                await self.connect()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning("reconnect_failed", error=str(e))
+                await asyncio.sleep(self._config.reconnect_base_delay_s)
 
     async def _recv_loop(self) -> None:
         """Continuously receive messages from the bridge."""
@@ -166,7 +206,8 @@ class BridgeClient:
                 continue
             except websockets.ConnectionClosed:
                 logger.warning("connection_closed")
-                self._connected = False
+                await self._mark_disconnected()
+                self._schedule_reconnect()
                 break
             except Exception as e:
                 logger.error("recv_error", error=str(e))
@@ -183,10 +224,20 @@ class BridgeClient:
                 continue
             except websockets.ConnectionClosed:
                 logger.warning("connection_closed_during_send")
-                self._connected = False
+                await self._mark_disconnected()
+                self._schedule_reconnect()
                 break
             except Exception as e:
                 logger.error("send_error", error=str(e))
+
+    async def _wait_until_connected(self) -> None:
+        while not self.connected:
+            self._schedule_reconnect()
+            await asyncio.sleep(0.1)
+
+    async def _send_or_queue(self, msg_type: str, payload: dict) -> str:
+        await self._wait_until_connected()
+        return self._enqueue(msg_type, payload)
 
     def _enqueue(self, msg_type: str, payload: dict) -> str:
         """Build a message envelope and queue it for sending. Returns the message ID."""
@@ -204,19 +255,19 @@ class BridgeClient:
     # ── Public API ──────────────────────────────────────────
 
     async def subscribe_events(self, event_types: list[str]) -> None:
-        self._enqueue("event.subscribe", {"event_types": event_types})
+        await self._send_or_queue("event.subscribe", {"event_types": event_types})
 
     async def unsubscribe_events(self, event_types: list[str]) -> None:
-        self._enqueue("event.unsubscribe", {"event_types": event_types})
+        await self._send_or_queue("event.unsubscribe", {"event_types": event_types})
 
     async def configure_observations(self, spatial_radius: int = 30, send_rate_hz: int = 10) -> None:
-        self._enqueue("observation.configure", {
+        await self._send_or_queue("observation.configure", {
             "spatial_radius": spatial_radius,
             "send_rate_hz": send_rate_hz,
         })
 
     async def request_observation(self) -> None:
-        self._enqueue("observation.request", {})
+        await self._send_or_queue("observation.request", {})
 
     async def register_agent(self, position: tuple[float, float] | None = None,
                               agent_name: str = "terraclaw",
@@ -227,7 +278,7 @@ class BridgeClient:
             payload["position"] = {"x": position[0], "y": position[1]}
         if observation_radius is not None:
             payload["observation_radius"] = observation_radius
-        self._enqueue("agent.register", payload)
+        await self._send_or_queue("agent.register", payload)
         dprint("[BRIDGE]", "Waiting for agent.registered...")
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
@@ -257,6 +308,7 @@ class BridgeClient:
         async with self._pending_lock:
             self._pending[action_id] = future
 
+        await self._wait_until_connected()
         self._tx_queue.put_nowait(json.dumps({
             "id": action_id,
             "type": "agent.action",
@@ -328,7 +380,7 @@ class BridgeClient:
         payload: dict[str, Any] = {"agent_id": agent_id}
         if action_id:
             payload["action_id"] = action_id
-        self._enqueue("agent.action.cancel", payload)
+        await self._send_or_queue("agent.action.cancel", payload)
 
         # Resolve the pending future immediately so polls don't show stale "running"
         if action_id:
@@ -340,7 +392,7 @@ class BridgeClient:
 
     async def unregister_agent(self, agent_id: str) -> None:
         """Unregister / despawn an NPC agent."""
-        self._enqueue("agent.unregister", {"agent_id": agent_id})
+        await self._send_or_queue("agent.unregister", {"agent_id": agent_id})
 
     async def send_llm_response(
         self,
@@ -359,7 +411,7 @@ class BridgeClient:
             payload["output"] = output
         if error:
             payload["error"] = error
-        self._enqueue("llm.response", payload)
+        await self._send_or_queue("llm.response", payload)
 
     async def receive_instruction(self, timeout: float = 0.1) -> str | None:
         """Receive the next pending player.chat instruction (non-blocking)."""
@@ -378,7 +430,7 @@ class BridgeClient:
                 return AgentObservation.from_payload(msg.payload)
 
     async def send_ping(self) -> None:
-        self._enqueue("ping", {})
+        await self._send_or_queue("ping", {})
 
     async def receive(self, timeout: float = 1.0) -> MessageEnvelope | None:
         """Receive the next message from the bridge."""

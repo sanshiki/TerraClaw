@@ -65,11 +65,11 @@ public sealed class ExampleTerraClawAgent : ModNPC
             return;
 
         string instruction = _queuedInstruction;
-        _queuedInstruction = "";
+        _queuedInstruction = $"The player sent this /agent instruction: {instruction}. Reply with one short talk output.";
         _llm = LlmBridgeSystem.Instance.Request(
             _llmAgentId,
             SystemPrompt,
-            $"The player sent this /agent instruction: {instruction}. Reply with one short talk output.",
+            _queuedInstruction,
             BuildObservation(instruction),
             BuildOutputContract(),
             timeoutMs: 30000);

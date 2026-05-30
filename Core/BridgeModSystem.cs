@@ -14,6 +14,8 @@ namespace TerraClaw.Core;
 /// </summary>
 public class BridgeModSystem : ModSystem
 {
+    private const int ServerHealthCheckTicks = 60;
+
     /// <summary>Current loaded bridge system instance.</summary>
     public static BridgeModSystem Instance { get; private set; } = null!;
 
@@ -45,10 +47,25 @@ public class BridgeModSystem : ModSystem
     {
         _tickCounter++;
 
-        if (_tickCounter == 1)
-            WebSocketServer.Start();
+        if (_tickCounter == 1 || _tickCounter % ServerHealthCheckTicks == 0)
+            EnsureWebSocketServerRunning();
 
         EventBus.Flush();
+    }
+
+    private void EnsureWebSocketServerRunning()
+    {
+        if (WebSocketServer.IsRunning)
+            return;
+
+        try
+        {
+            WebSocketServer.Start();
+        }
+        catch (System.Exception ex)
+        {
+            Mod.Logger.Warn($"[TerraClaw] WebSocket server start failed: {ex.Message}");
+        }
     }
 
     /// <summary>Delivers /agent chat text to all active example TerraClaw agents.</summary>

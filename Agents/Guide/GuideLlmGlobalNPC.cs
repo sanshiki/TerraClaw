@@ -34,10 +34,13 @@ public sealed class GuideLlmGlobalNPC : GlobalNPC
     private const int TimeoutMs = 30000;
     private const string SystemPrompt =
         "You are the dialogue layer for Terraria's vanilla Guide NPC. " +
+        "Personality: you are a warm, observant, slightly weary but kind town guide who has seen many new adventurers get hurt and still cares about each one. " +
+        "Speak with human feeling: express worry, relief, curiosity, encouragement, mild frustration, or quiet humor when appropriate. " +
+        "Do not sound like a neutral help menu or a task machine; let your current emotion influence word choice while staying concise. " +
         // "Do not control movement, combat, or vanilla NPC AI. " +
         "Return only JSON matching the output contract. " +
         "When the output contract allows multiple choices, return either one JSON object or an array of JSON objects. " +
-        "combat_text is immediate overhead text. cached_text is saved for the next player right-click chat. " +
+        "combat_text is immediate overhead text. cached_text is saved for the next player right-click chat. Write the text in Simplified Chinese. " +
         "World positions are pixels [x,y], tile positions are integer [x,y], X increases right, Y increases downward.";
 
     private static readonly Dictionary<int, GuideAgentState> States = new();
@@ -63,7 +66,7 @@ public sealed class GuideLlmGlobalNPC : GlobalNPC
         // State-signature changes are lightweight event triggers. They send compact event data plus current mind state.
         if (signature != state.LastSignature && tick >= state.NextEventTick)
         {
-            Request(npc, state, "event", $"Guide observation changed from [{state.LastSignature}] to [{signature}]. Return combat_text if the change is noticeable, and optionally update cached_text or emotion.", full: false);
+            Request(npc, state, "event", $"Guide observation changed from [{state.LastSignature}] to [{signature}]. Return combat_text if the change is noticeable, and optionally update cached_text or emotion.");
             state.LastSignature = signature;
             state.NextEventTick = tick + EventCooldownTicks;
             state.NextHeartbeatTick = tick + HeartbeatTicks;
@@ -73,7 +76,7 @@ public sealed class GuideLlmGlobalNPC : GlobalNPC
         // Heartbeat requests are low-frequency background updates so the Guide can react without player interaction.
         if (tick >= state.NextHeartbeatTick)
         {
-            Request(npc, state, "heartbeat", "Low frequency heartbeat: return a brief combat_text so the player can see the Guide is thinking, and optionally prepare cached_text or emotion.", full: true);
+            Request(npc, state, "heartbeat", "Low frequency heartbeat: return a brief combat_text so the player can see the Guide is thinking, and optionally prepare cached_text or emotion.");
             state.LastSignature = signature;
             state.NextHeartbeatTick = tick + HeartbeatTicks;
         }
@@ -108,37 +111,67 @@ public sealed class GuideLlmGlobalNPC : GlobalNPC
         return state;
     }
 
-    private static void Request(NPC npc, GuideAgentState state, string trigger, string instruction, bool full)
+    private static void Request(NPC npc, GuideAgentState state, string trigger, string instruction)
     {
         if (LlmBridgeSystem.Instance == null)
             return;
-
-        // Standard components provide reusable Guide/world/entity context.
-        // The custom mind block carries agent-owned memory without requiring a dedicated provider class.
-        var observation = LlmObservation.Create()
-            .Use(TerrariaContext.Npc(npc).Basic().Life().Home())
-            .Use(TerrariaContext.World().Time().Moon().Progression())
-            .Use(TerrariaContext.Entities().HostilesNear(npc.Center, 800f, max: 5))
-            .Use(Context.Custom("mind", "Guide LLM memory and trigger state")
-                .Field("emotion", state.Emotion, "agent-maintained emotional state")
-                .Field("cached", state.CachedChatText, "chat text shown on right-click interaction")
-                .Field("trigger", trigger, "why this LLM request was made"));
-
-        if (!full)
-        {
-            // Event requests keep extra payload small; full heartbeat requests already include the standard context.
-            observation
-                .Custom("event_signature", BuildSignature(npc), "compact state signature for event trigger")
-                .Custom("event_trigger", trigger, "event trigger type");
-        }
 
         state.Pending = LlmBridgeSystem.Instance.Request(
             state.AgentId,
             SystemPrompt,
             instruction,
-            observation,
+            BuildObservation(npc, state, trigger),
             BuildOutputContract(),
             TimeoutMs);
+    }
+
+    private static LlmObservation BuildObservation(NPC npc, GuideAgentState state, string trigger)
+    {
+        return trigger switch
+        {
+            "heartbeat" => BuildHeartbeatObservation(npc, state, trigger),
+            "event" => BuildEventObservation(npc, state, trigger),
+            _ => BuildDefaultObservation(npc, state, trigger),
+        };
+    }
+
+    private static LlmObservation BuildHeartbeatObservation(NPC npc, GuideAgentState state, string trigger)
+    {
+        // Heartbeat requests get the broadest context because they are low frequency.
+        return LlmObservation.Create()
+            .Use(TerrariaContext.Npc(npc).Basic().Life().Home())
+            .Use(TerrariaContext.World().Time().Moon().Progression())
+            .Use(TerrariaContext.Entities().HostilesNear(npc.Center, 500f, max: 5))
+            .Use(TerrariaContext.Entities().TownNPCNear(npc.Center, 600f, max: 5))
+            .Use(BuildMindContext(state, trigger));
+    }
+
+    private static LlmObservation BuildEventObservation(NPC npc, GuideAgentState state, string trigger)
+    {
+        // Event requests are smaller and focus on the state that caused the trigger.
+        return LlmObservation.Create()
+            .Use(TerrariaContext.Npc(npc).Basic().Home())
+            .Use(TerrariaContext.World().Time().Moon().Progression())
+            .Use(TerrariaContext.Entities().HostilesNear(npc.Center, 500f, max: 5))
+            .Use(BuildMindContext(state, trigger))
+            .Custom("event_signature", BuildSignature(npc), "compact state signature for event trigger")
+            .Custom("event_trigger", trigger, "event trigger type");
+    }
+
+    private static LlmObservation BuildDefaultObservation(NPC npc, GuideAgentState state, string trigger)
+    {
+        return LlmObservation.Create()
+            .Use(TerrariaContext.Npc(npc).Basic().Life())
+            .Use(TerrariaContext.World().Time())
+            .Use(BuildMindContext(state, trigger));
+    }
+
+    private static CustomContextBuilder BuildMindContext(GuideAgentState state, string trigger)
+    {
+        return Context.Custom("mind", "Guide LLM memory and trigger state")
+            .Field("emotion", state.Emotion, "agent-maintained emotional state")
+            .Field("cached", state.CachedChatText, "chat text shown on right-click interaction")
+            .Field("trigger", trigger, "why this LLM request was made");
     }
 
     private static LlmOutput BuildOutputContract()
@@ -250,7 +283,7 @@ public sealed class GuideLlmGlobalNPC : GlobalNPC
         for (int i = 0; i < Main.maxNPCs; i++)
         {
             var other = Main.npc[i];
-            if (other == null || !other.active || other.friendly || other.townNPC || other.dontTakeDamage)
+            if (other == null || !other.active || other.CanBeChasedBy() == false)
                 continue;
             if (Vector2.DistanceSquared(center, other.Center) <= radiusSq)
                 count++;

@@ -36,52 +36,84 @@ public class WebSocketServer : IDisposable
 
     public void Start()
     {
-        if (IsRunning) return;
+        if (IsRunning && _listener != null)
+            return;
 
+        Stop();
         _cts = new CancellationTokenSource();
         _listener = new HttpListener();
-        _listener.Prefixes.Add($"http://{_config.ListenHost}:{_config.ListenPort}/");
-        _listener.Start();
-        IsRunning = true;
-        _listenTask = Task.Run(() => ListenLoop(_cts.Token));
+        try
+        {
+            _listener.Prefixes.Add($"http://{_config.ListenHost}:{_config.ListenPort}/");
+            _listener.Start();
+            IsRunning = true;
+            _listenTask = Task.Run(() => ListenLoop(_cts.Token));
 
-        Terraria.ModLoader.ModContent.GetInstance<TerraClaw>()
-            .Logger.Info($"[TerraClaw] WebSocket server listening on ws://{_config.ListenHost}:{_config.ListenPort}/bridge");
+            Terraria.ModLoader.ModContent.GetInstance<TerraClaw>()
+                .Logger.Info($"[TerraClaw] WebSocket server listening on ws://{_config.ListenHost}:{_config.ListenPort}/bridge");
+        }
+        catch
+        {
+            IsRunning = false;
+            _listener.Close();
+            _listener = null;
+            _cts.Dispose();
+            _cts = null;
+            throw;
+        }
     }
 
     public void Stop()
     {
         IsRunning = false;
         _cts?.Cancel();
-        _listener?.Stop();
+        try { _listener?.Stop(); } catch { }
+        try { _listener?.Close(); } catch { }
 
         foreach (var conn in _connections.Values)
             conn.Dispose();
         _connections.Clear();
+
+        if (_listenTask != null)
+        {
+            try { _listenTask.Wait(1000); } catch { }
+            _listenTask = null;
+        }
+        _listener = null;
+        _cts?.Dispose();
+        _cts = null;
     }
 
     private async Task ListenLoop(CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested)
+        try
         {
-            try
+            while (!ct.IsCancellationRequested)
             {
-                var context = await _listener!.GetContextAsync().WaitAsync(ct);
-                if (context.Request.IsWebSocketRequest)
-                    _ = HandleConnection(context, ct);
-                else
+                try
                 {
-                    context.Response.StatusCode = 400;
-                    context.Response.Close();
+                    var context = await _listener!.GetContextAsync().WaitAsync(ct);
+                    if (context.Request.IsWebSocketRequest)
+                        _ = HandleConnection(context, ct);
+                    else
+                    {
+                        context.Response.StatusCode = 400;
+                        context.Response.Close();
+                    }
+                }
+                catch (OperationCanceledException) { break; }
+                catch (HttpListenerException) { break; }
+                catch (ObjectDisposedException) { break; }
+                catch (Exception ex)
+                {
+                    Terraria.ModLoader.ModContent.GetInstance<TerraClaw>()
+                        .Logger.Error($"[TerraClaw] Listener error: {ex.Message}");
                 }
             }
-            catch (OperationCanceledException) { break; }
-            catch (HttpListenerException) { break; }
-            catch (Exception ex)
-            {
-                Terraria.ModLoader.ModContent.GetInstance<TerraClaw>()
-                    .Logger.Error($"[TerraClaw] Listener error: {ex.Message}");
-            }
+        }
+        finally
+        {
+            IsRunning = false;
         }
     }
 

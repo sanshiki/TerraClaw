@@ -170,6 +170,10 @@ Config is loaded from `runtime/config/config.yaml`. YAML has precedence; environ
 - Python tests live in `runtime/tests/`.
 - Dashboard is available at `http://127.0.0.1:9090` while the runtime is running.
 
+## Todos
+
+- [ ] Add TileContextBuilder and world memory: Convert surrounding tiles to a sematic mapping, including overall topology and specific interesting tiles.
+
 ## License
 
 MIT
