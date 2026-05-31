@@ -56,9 +56,11 @@ var obs = LlmObservation.Create()
 TerrariaContext.Npc(npc).Basic().Life().Home()
 TerrariaContext.World().Time().Moon().Progression()
 TerrariaContext.Entities().HostilesNear(npc.Center, 800f, max: 5)
+TerrariaContext.Tiles(npc.Center, radiusTiles: 24).Area(maxSpecials: 12)
 ```
 
 Compose these per request. For example, an event callback can send only `World().Time()` plus a custom event payload instead of a full observation.
+Tile context intentionally summarizes topology tags and notable tiles instead of sending a raw tile grid.
 
 ### `ISymbolicContextProvider`
 

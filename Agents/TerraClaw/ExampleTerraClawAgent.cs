@@ -65,11 +65,12 @@ public sealed class ExampleTerraClawAgent : ModNPC
             return;
 
         string instruction = _queuedInstruction;
-        _queuedInstruction = $"The player sent this /agent instruction: {instruction}. Reply with one short talk output.";
+        string requestInstruction = $"The player sent this /agent instruction: {instruction}. Reply with one short talk output.";
+        _queuedInstruction = "";
         _llm = LlmBridgeSystem.Instance.Request(
             _llmAgentId,
             SystemPrompt,
-            _queuedInstruction,
+            requestInstruction,
             BuildObservation(instruction),
             BuildOutputContract(),
             timeoutMs: 30000);
@@ -126,6 +127,7 @@ public sealed class ExampleTerraClawAgent : ModNPC
         return LlmObservation.Create()
             .Use(TerrariaContext.Npc(NPC).Basic().Life())
             .Use(TerrariaContext.World().Time())
+            .Use(TerrariaContext.Tiles(NPC.Center, radiusTiles: 24).Area(maxSpecials: 12))
             .Use(Context.Custom("input", "player instruction for this request")
                 .Field("text", instruction, "latest /agent command text"));
     }
