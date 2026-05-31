@@ -173,6 +173,7 @@ Config is loaded from `runtime/config/config.yaml`. YAML has precedence; environ
 ## Todos
 
 - [ ] Add TileContextBuilder and world memory: Convert surrounding tiles to a sematic mapping, including overall topology and specific interesting tiles.
+- [ ] Transplant python llm worker to C#. (openai related llm api calling tools)
 
 ## License
 
