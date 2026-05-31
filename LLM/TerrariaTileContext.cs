@@ -74,6 +74,7 @@ public sealed class TileAreaComponent : ISymbolicContextProvider
             },
             ["liquid"] = LiquidToJson(scan),
             ["floor"] = FloorToJson(scan),
+            ["topology"] = TopologyToJson(scan),
             ["tags"] = StringListToJson(scan.Tags),
             ["specials"] = SpecialsToVerboseJson(scan.Specials),
         };
@@ -130,6 +131,19 @@ public sealed class TileAreaComponent : ISymbolicContextProvider
             ["kind"] = scan.DominantLiquidKind,
             ["tiles"] = scan.DominantLiquidTiles,
             ["fill"] = scan.DominantLiquidFill,
+        };
+    }
+
+    private static JsonObject TopologyToJson(TileScanSnapshot scan)
+    {
+        return new JsonObject
+        {
+            ["region_tiles"] = scan.RegionTiles,
+            ["width"] = scan.RegionWidth,
+            ["height"] = scan.RegionHeight,
+            ["aspect"] = scan.RegionAspectRatio,
+            ["open_edges"] = scan.OpenToEdgeCount,
+            ["blocked_boundary"] = scan.BlockedBoundaryRatio,
         };
     }
 
@@ -201,6 +215,7 @@ internal sealed class TileScanSnapshot
         int[] liquidFill,
         int? floorDx,
         int? floorDy,
+        TileTopology topology,
         IReadOnlyList<string> tags,
         IReadOnlyList<TileSpecialEntry> specials)
     {
@@ -214,6 +229,12 @@ internal sealed class TileScanSnapshot
         OpenRatio = Ratio(openTiles, sampledTiles);
         FloorDx = floorDx;
         FloorDy = floorDy;
+        RegionTiles = topology.RegionTiles;
+        RegionWidth = topology.Width;
+        RegionHeight = topology.Height;
+        RegionAspectRatio = Math.Round(topology.AspectRatio, 2);
+        OpenToEdgeCount = topology.OpenToEdgeCount;
+        BlockedBoundaryRatio = Math.Round(topology.BlockedBoundaryRatio, 2);
         Tags = tags;
         Specials = specials;
 
@@ -244,6 +265,12 @@ internal sealed class TileScanSnapshot
     public double DominantLiquidFill { get; }
     public int? FloorDx { get; }
     public int? FloorDy { get; }
+    public int RegionTiles { get; }
+    public int RegionWidth { get; }
+    public int RegionHeight { get; }
+    public double RegionAspectRatio { get; }
+    public int OpenToEdgeCount { get; }
+    public double BlockedBoundaryRatio { get; }
     public IReadOnlyList<string> Tags { get; }
     public IReadOnlyList<TileSpecialEntry> Specials { get; }
 
@@ -257,7 +284,6 @@ internal sealed class TileScanSnapshot
         int platformTiles = 0;
         int wallTiles = 0;
         int openTiles = 0;
-        int slopeTiles = 0;
         int wiredTiles = 0;
         int hazardTiles = 0;
         int containerTiles = 0;
@@ -267,8 +293,9 @@ internal sealed class TileScanSnapshot
         int oreTiles = 0;
         int ropeTiles = 0;
         int signTiles = 0;
-        int horizontalOpen = 0;
-        int verticalOpen = 0;
+        int size = radiusTiles * 2 + 1;
+        var passable = new bool[size, size];
+        var standable = new bool[size, size];
         var liquidTiles = new int[LiquidKinds];
         var liquidFill = new int[LiquidKinds];
         var candidates = new List<TileSpecialEntry>();
@@ -294,9 +321,14 @@ internal sealed class TileScanSnapshot
                 bool hasTile = tile.HasTile;
                 bool solid = hasTile && tile.HasUnactuatedTile && IsSolid(tile.TileType);
                 bool platform = hasTile && tile.HasUnactuatedTile && IsPlatform(tile.TileType);
+                bool floor = hasTile && tile.HasUnactuatedTile && IsStandable(tile.TileType);
                 bool wall = tile.WallType != 0;
                 bool liquid = tile.LiquidAmount > 0;
-                bool open = !solid && !platform && !liquid;
+                bool open = !solid && !liquid;
+                int localX = dx + radiusTiles;
+                int localY = dy + radiusTiles;
+                passable[localX, localY] = open;
+                standable[localX, localY] = floor;
 
                 if (solid)
                     solidTiles++;
@@ -306,12 +338,6 @@ internal sealed class TileScanSnapshot
                     wallTiles++;
                 if (open)
                     openTiles++;
-                if (open && dy == 0)
-                    horizontalOpen++;
-                if (open && dx == 0)
-                    verticalOpen++;
-                if (hasTile && (tile.IsHalfBlock || tile.Slope != SlopeType.Solid))
-                    slopeTiles++;
                 if (HasWireOrActuator(tile))
                     wiredTiles++;
 
@@ -350,15 +376,13 @@ internal sealed class TileScanSnapshot
             }
         }
 
-        FindFloor(centerX, centerY, radiusTiles, out int? floorDx, out int? floorDy);
+        var topology = AnalyzeTopology(passable, standable, centerX, centerY, radiusTiles);
 
         var tags = BuildTags(
             sampledTiles,
             solidTiles,
-            platformTiles,
             wallTiles,
             openTiles,
-            slopeTiles,
             wiredTiles,
             hazardTiles,
             containerTiles,
@@ -368,11 +392,8 @@ internal sealed class TileScanSnapshot
             oreTiles,
             ropeTiles,
             signTiles,
-            horizontalOpen,
-            verticalOpen,
-            radiusTiles,
             liquidTiles,
-            floorDy);
+            topology);
 
         return new TileScanSnapshot(
             centerX,
@@ -385,8 +406,9 @@ internal sealed class TileScanSnapshot
             openTiles,
             liquidTiles,
             liquidFill,
-            floorDx,
-            floorDy,
+            topology.FloorDx,
+            topology.FloorDy,
+            topology,
             tags,
             SelectSpecials(candidates, maxSpecials));
     }
@@ -394,10 +416,8 @@ internal sealed class TileScanSnapshot
     private static IReadOnlyList<string> BuildTags(
         int sampledTiles,
         int solidTiles,
-        int platformTiles,
         int wallTiles,
         int openTiles,
-        int slopeTiles,
         int wiredTiles,
         int hazardTiles,
         int containerTiles,
@@ -407,35 +427,39 @@ internal sealed class TileScanSnapshot
         int oreTiles,
         int ropeTiles,
         int signTiles,
-        int horizontalOpen,
-        int verticalOpen,
-        int radiusTiles,
         int[] liquidTiles,
-        int? floorDy)
+        TileTopology topology)
     {
         var tags = new List<string>();
         double solidRatio = Ratio(solidTiles, sampledTiles);
         double wallRatio = Ratio(wallTiles, sampledTiles);
         double openRatio = Ratio(openTiles, sampledTiles);
-        double horizontalOpenRatio = radiusTiles > 0 ? horizontalOpen / (radiusTiles * 2.0 + 1) : 0;
-        double verticalOpenRatio = radiusTiles > 0 ? verticalOpen / (radiusTiles * 2.0 + 1) : 0;
 
-        if (openRatio >= 0.7 && wallRatio < 0.25)
+        if (topology.FoundRegion && topology.OpenToEdgeCount >= 3 && openRatio >= 0.55 && wallRatio < 0.3)
             tags.Add("open");
-        if (wallRatio >= 0.35 && solidRatio >= 0.2)
+        if (topology.FoundRegion && topology.OpenToEdgeCount == 0 && topology.BlockedBoundaryRatio >= 0.7)
             tags.Add("enclosed");
-        if (horizontalOpenRatio >= 0.65 || verticalOpenRatio >= 0.65)
+        if (topology.FoundRegion &&
+            topology.Width >= 6 &&
+            topology.Height >= 3 &&
+            topology.AspectRatio >= 1.8 &&
+            topology.OpenToEdgeCount <= 2)
+        {
             tags.Add("tunnel");
-        if (verticalOpenRatio >= 0.7)
-            tags.Add("shaft");
-        if (platformTiles > 0)
-            tags.Add("platforms");
-        if (slopeTiles > 0)
-            tags.Add("slopes");
-        if (floorDy.HasValue)
+        }
+        if (topology.FoundRegion &&
+            topology.Height >= 8 &&
+            topology.AspectRatio <= 0.65 &&
+            topology.OpenTop &&
+            topology.OpenBottom)
+        {
+            if(topology.OpenBottom)
+                tags.Add("shaft");
+            else
+                tags.Add("pit");
+        }
+        if (topology.FloorDy.HasValue)
             tags.Add("floor_near");
-        else
-            tags.Add("pit");
         if (liquidTiles[0] > 0)
             tags.Add("water");
         if (liquidTiles[1] > 0)
@@ -564,28 +588,181 @@ internal sealed class TileScanSnapshot
             flags);
     }
 
-    private static void FindFloor(int centerX, int centerY, int radiusTiles, out int? floorDx, out int? floorDy)
+    private static TileTopology AnalyzeTopology(bool[,] passable, bool[,] standable, int centerX, int centerY, int radiusTiles)
     {
+        const int maxDebugDust = 120;
+        int size = radiusTiles * 2 + 1;
+        if (!TryFindRegionStart(passable, radiusTiles, out int startX, out int startY))
+            return TileTopology.Empty;
+
+        var visited = new bool[size, size];
+        var queue = new Queue<(int X, int Y)>();
+        queue.Enqueue((startX, startY));
+        visited[startX, startY] = true;
+        int debugDustCount = 0;
+
+        int count = 0;
+        int minX = startX;
+        int maxX = startX;
+        int minY = startY;
+        int maxY = startY;
+        bool openLeft = false;
+        bool openRight = false;
+        bool openTop = false;
+        bool openBottom = false;
+
+        while (queue.Count > 0)
+        {
+            var (x, y) = queue.Dequeue();
+            count++;
+            minX = Math.Min(minX, x);
+            maxX = Math.Max(maxX, x);
+            minY = Math.Min(minY, y);
+            maxY = Math.Max(maxY, y);
+
+            if (x == 0)
+                openLeft = true;
+            if (x == size - 1)
+                openRight = true;
+            if (y == 0)
+                openTop = true;
+            if (y == size - 1)
+                openBottom = true;
+
+            bool debug = false;
+            if (debug && debugDustCount < maxDebugDust && count % 4 == 0)
+            {
+                Dust.QuickDust(new Vector2((centerX + x - radiusTiles) * 16f + 8f, (centerY + y - radiusTiles) * 16f + 8f), Color.Cyan);
+                debugDustCount++;
+            }
+
+            TryVisit(x - 1, y);
+            TryVisit(x + 1, y);
+            TryVisit(x, y - 1);
+            TryVisit(x, y + 1);
+        }
+
+        FindRegionFloor(visited, standable, radiusTiles, out int? floorDx, out int? floorDy);
+
+        int width = maxX - minX + 1;
+        int height = maxY - minY + 1;
+        double aspectRatio = height > 0 ? width / (double)height : 0;
+        int openToEdgeCount = (openLeft ? 1 : 0) + (openRight ? 1 : 0) + (openTop ? 1 : 0) + (openBottom ? 1 : 0);
+        double blockedBoundaryRatio = CountBlockedBoundaryRatio(visited, passable, radiusTiles);
+        return new TileTopology(
+            true,
+            count,
+            width,
+            height,
+            aspectRatio,
+            openLeft,
+            openRight,
+            openTop,
+            openBottom,
+            openToEdgeCount,
+            blockedBoundaryRatio,
+            floorDx,
+            floorDy);
+
+        void TryVisit(int x, int y)
+        {
+            if (x < 0 || x >= size || y < 0 || y >= size || visited[x, y] || !passable[x, y])
+                return;
+
+            visited[x, y] = true;
+            queue.Enqueue((x, y));
+        }
+    }
+
+    private static bool TryFindRegionStart(bool[,] passable, int radiusTiles, out int startX, out int startY)
+    {
+        int size = radiusTiles * 2 + 1;
+        int center = radiusTiles;
+        if (passable[center, center])
+        {
+            startX = center;
+            startY = center;
+            return true;
+        }
+
+        for (int r = 1; r <= radiusTiles; r++)
+        {
+            int rSq = r * r;
+            for (int y = Math.Max(0, center - r); y <= Math.Min(size - 1, center + r); y++)
+            {
+                for (int x = Math.Max(0, center - r); x <= Math.Min(size - 1, center + r); x++)
+                {
+                    int dx = x - center;
+                    int dy = y - center;
+                    if (dx * dx + dy * dy > rSq || !passable[x, y])
+                        continue;
+
+                    startX = x;
+                    startY = y;
+                    return true;
+                }
+            }
+        }
+
+        startX = center;
+        startY = center;
+        return false;
+    }
+
+    private static double CountBlockedBoundaryRatio(bool[,] region, bool[,] passable, int radiusTiles)
+    {
+        int size = radiusTiles * 2 + 1;
+        int blocked = 0;
+        int total = 0;
+
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                if (!region[x, y])
+                    continue;
+
+                CheckNeighbor(x - 1, y);
+                CheckNeighbor(x + 1, y);
+                CheckNeighbor(x, y - 1);
+                CheckNeighbor(x, y + 1);
+            }
+        }
+
+        return total > 0 ? blocked / (double)total : 0;
+
+        void CheckNeighbor(int x, int y)
+        {
+            if (x >= 0 && x < size && y >= 0 && y < size && region[x, y])
+                return;
+
+            total++;
+            if (x < 0 || x >= size || y < 0 || y >= size || !passable[x, y])
+                blocked++;
+        }
+    }
+
+    private static void FindRegionFloor(bool[,] region, bool[,] standable, int radiusTiles, out int? floorDx, out int? floorDy)
+    {
+        int size = radiusTiles * 2 + 1;
+        int center = radiusTiles;
         floorDx = null;
         floorDy = null;
         double bestDistance = double.MaxValue;
 
-        for (int dy = 0; dy <= radiusTiles; dy++)
+        for (int y = center; y < size; y++)
         {
-            int y = centerY + dy;
-            if (y < 0 || y >= Main.maxTilesY)
-                continue;
-
-            for (int dx = -radiusTiles; dx <= radiusTiles; dx++)
+            for (int x = 0; x < size; x++)
             {
-                int x = centerX + dx;
-                if (x < 0 || x >= Main.maxTilesX || dx * dx + dy * dy > radiusTiles * radiusTiles)
+                if (!region[x, y])
                     continue;
 
-                var tile = Framing.GetTileSafely(x, y);
-                if (!tile.HasTile || !tile.HasUnactuatedTile || !IsStandable(tile.TileType))
+                int belowY = y + 1;
+                if (belowY >= size || !standable[x, belowY])
                     continue;
 
+                int dx = x - center;
+                int dy = belowY - center;
                 double distance = Math.Sqrt(dx * dx + dy * dy);
                 if (distance >= bestDistance)
                     continue;
@@ -595,7 +772,7 @@ internal sealed class TileScanSnapshot
                 bestDistance = distance;
             }
 
-            if (floorDy == dy)
+            if (floorDy == y + 1 - center)
                 return;
         }
     }
@@ -804,4 +981,35 @@ internal sealed record TileSpecialEntry(
             1,
             new[] { $"fill:{fill}" });
     }
+}
+
+internal sealed record TileTopology(
+    bool FoundRegion,
+    int RegionTiles,
+    int Width,
+    int Height,
+    double AspectRatio,
+    bool OpenLeft,
+    bool OpenRight,
+    bool OpenTop,
+    bool OpenBottom,
+    int OpenToEdgeCount,
+    double BlockedBoundaryRatio,
+    int? FloorDx,
+    int? FloorDy)
+{
+    public static TileTopology Empty { get; } = new(
+        false,
+        0,
+        0,
+        0,
+        0,
+        false,
+        false,
+        false,
+        false,
+        0,
+        0,
+        null,
+        null);
 }
