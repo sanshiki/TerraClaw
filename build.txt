@@ -1,3 +1,4 @@
 displayName = TerraClaw
 author = Sanshiki
 version = 0.1
+dllReferences = Microsoft.Extensions.DependencyInjection.Abstractions, Microsoft.Extensions.Logging.Abstractions, OpenAI, System.ClientModel, System.Memory.Data

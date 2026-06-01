@@ -81,8 +81,15 @@ public sealed class LlmRequestHandle
     {
         if (IsDone)
             return;
-        Status = LlmRequestStatus.Cancelled;
+        MarkCancelled();
         LlmBridgeSystem.Instance?.Cancel(RequestId);
+    }
+
+    internal void MarkCancelled()
+    {
+        if (IsDone)
+            return;
+        Status = LlmRequestStatus.Cancelled;
     }
 
     internal void Complete(JsonNode? output)

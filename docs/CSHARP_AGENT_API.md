@@ -6,7 +6,7 @@ This document describes the current C#-first TerraClaw framework for adding LLM-
 
 ### `LlmBridgeSystem`
 
-`LlmBridgeSystem` sends generic LLM requests to the Python runtime and routes responses back by `request_id`.
+`LlmBridgeSystem` sends generic LLM requests from C# using the OpenAI .NET SDK and routes responses back by `request_id`.
 
 ```csharp
 var handle = LlmBridgeSystem.Instance.Request(
@@ -80,7 +80,7 @@ public sealed class MyProvider : ISymbolicContextProvider {
 }
 ```
 
-The Python runtime automatically renders:
+The C# prompt builder automatically renders:
 
 ```text
 m=[hp,mood]
