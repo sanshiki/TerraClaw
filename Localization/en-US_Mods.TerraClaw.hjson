@@ -3,6 +3,7 @@ Mods: {
 		NPCName.ExampleTerraClawAgent: TerraClaw Agent
 		ItemName.AgentSpawner: Agent Spawner
 		ItemTooltip.AgentSpawner: Debug item — spawns an AI agent at the cursor
+		Keybinds.ToggleDashboard.DisplayName: Toggle LLM Dashboard
 	}
 }
 
@@ -31,3 +32,5 @@ Items: {
 		DisplayName: Agent Spawner
 	}
 }
+
+Keybinds.ToggleDashboard.DisplayName: Toggle Dashboard

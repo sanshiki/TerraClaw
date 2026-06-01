@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using TerraClaw.Core;
 using TerraClaw.Network;
+using TerraClaw.UI;
 using Terraria;
 using Terraria.ModLoader;
 
@@ -223,6 +224,16 @@ public sealed class LlmBridgeSystem : ModSystem
             keys.Add(key);
         payload["observation_keys"] = keys;
 
+        LlmDebugLog.AddRequest(
+            handle.RequestId,
+            handle.AgentId,
+            instruction,
+            handle.TimeoutMs,
+            observation,
+            symbolicObservation,
+            outputContract,
+            observation.Select(pair => pair.Key).ToArray());
+
         BroadcastDebug("llm.debug.request", payload);
     }
 
@@ -245,6 +256,14 @@ public sealed class LlmBridgeSystem : ModSystem
             payload["output"] = output.DeepClone();
         if (!string.IsNullOrWhiteSpace(error))
             payload["error"] = error;
+
+        LlmDebugLog.AddResult(
+            handle.RequestId,
+            handle.AgentId,
+            status,
+            Math.Round(duration.TotalSeconds, 2),
+            output,
+            error);
 
         BroadcastDebug("llm.debug.result", payload);
     }
