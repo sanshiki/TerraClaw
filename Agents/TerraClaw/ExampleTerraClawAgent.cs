@@ -1,33 +1,58 @@
+#nullable enable
+
 using Microsoft.Xna.Framework;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Terraria;
+using Terraria.ID;
 using Terraria.ModLoader;
 using TerraClaw.LLM;
 
 namespace TerraClaw.Agents.TerraClaw;
 
 /// <summary>
-/// Minimal self-contained ModNPC example for the C#-first LLM framework.
-/// This class owns spawning, player instruction delivery, LLM requests, polling, and result display.
+/// Self-contained ModNPC example for the C#-first LLM framework.
+/// This owns player instruction delivery, memory, request polling, and a small action loop.
 /// </summary>
 public sealed class ExampleTerraClawAgent : ModNPC
 {
-    // Keep this example intentionally small: one /agent instruction triggers one LLM response.
-    private const int PlayerInstructionCooldownTicks = 60 * 5;
+    private const int ShortTermMemoryLimit = 8;
+    private const int ScanMemoryTicks = 60 * 30;
+    private const int MoveTimeoutTicks = 60 * 20;
+    private const int BreakTimeoutTicks = 60 * 12;
+    private const int BreakTilesMaxRadius = 5;
+    private const float MoveSpeed = 4.5f;
     private const string SystemPrompt =
         "You are an AI controller inside Terraria. Return only JSON matching the requested output contract.\n\n" +
         "Terraria coordinate system:\n" +
         "- World positions are measured in pixels as [x,y].\n" +
         "- Tile positions are integer grid coordinates: tile_x = pixel_x / 16, tile_y = pixel_y / 16.\n" +
-        "- X increases to the right.\n" +
-        "- Y increases downward.\n" +
-        "- This example only supports returning a short message.";
+        "- X increases to the right. Y increases downward.\n" +
+        "- You can fly through walls and ignore terrain blocking.\n" +
+        "- Choose exactly one action each turn.\n" +
+        "- While the task goal is not yet complete, prefer callback=true so the agent keeps acting. \n" +
+        "- If you need to await player's input, set callback=false so the agent waits for the next instruction turn.\n" +
+        "- If you believe the task is complete or unreachable, use plan to clear the goal memory, and inform the player. Remember NOT to use callback=true!\n" +
+        "- Use plan to update goal memory/todo list without doing a physical action.\n" +
+        "- Use scanarea when you need a larger tile observation before deciding.";
 
-    private readonly string _llmAgentId = System.Guid.NewGuid().ToString();
+    private readonly string _llmAgentId = Guid.NewGuid().ToString();
+    private readonly Queue<string> _shortTermMemory = new();
+    private readonly List<string> _longTermMemory = new();
+    private readonly List<string> _goalMemory = new();
+
     private LlmRequestHandle? _llm;
-    private int _nextPlayerInstructionTick;
+    private LlmRequestHandle? _compactLlm;
+    private PendingAction? _action;
+    private int _lastScanTick = -ScanMemoryTicks;
+    private int _lastScanRadius = 24;
     private string _queuedInstruction = "";
-
+    private string _pendingCallbackReason = "";
+    private string _lastActionSummary = "none";
+    private int _requestSequence;
     public override void SetStaticDefaults()
     {
         Main.npcFrameCount[Type] = 4;
@@ -53,28 +78,10 @@ public sealed class ExampleTerraClawAgent : ModNPC
 
     public override void AI()
     {
+        PollCompactLlm();
         PollLlm();
-
-        if (_llm != null && _llm.IsPending)
-            return;
-        if (string.IsNullOrWhiteSpace(_queuedInstruction))
-            return;
-        if (Main.GameUpdateCount < _nextPlayerInstructionTick)
-            return;
-        if (LlmBridgeSystem.Instance == null)
-            return;
-
-        string instruction = _queuedInstruction;
-        string requestInstruction = $"The player sent this /agent instruction: {instruction}. Reply with one short talk output.";
-        _queuedInstruction = "";
-        _llm = LlmBridgeSystem.Instance.Request(
-            _llmAgentId,
-            SystemPrompt,
-            requestInstruction,
-            BuildObservation(instruction),
-            BuildOutputContract(),
-            timeoutMs: 30000);
-        _nextPlayerInstructionTick = (int)Main.GameUpdateCount + PlayerInstructionCooldownTicks;
+        UpdateAction();
+        MaybeStartNextRequest();
     }
 
     public override void FindFrame(int frameHeight)
@@ -121,45 +128,460 @@ public sealed class ExampleTerraClawAgent : ModNPC
         return delivered;
     }
 
-    /// <summary>Builds the smallest useful observation for this demo request.</summary>
-    private LlmObservation BuildObservation(string instruction)
+    private void MaybeStartNextRequest()
     {
+        if (_llm != null && _llm.IsPending)
+            return;
+        if (_compactLlm != null && _compactLlm.IsPending)
+            return;
+        if (_action != null)
+            return;
+        if (LlmBridgeSystem.Instance == null)
+            return;
+
+        // New player commands can interrupt callback chains. Memory compact runs before callbacks
+        // so STM does not grow indefinitely during long tasks.
+        if (TryStartPlayerInstructionRequest())
+            return;
+        if (TryStartCompactRequest())
+            return;
+        TryStartCallbackRequest();
+    }
+
+    private bool TryStartPlayerInstructionRequest()
+    {
+        if (string.IsNullOrWhiteSpace(_queuedInstruction))
+            return false;
+        string playerInstruction = _queuedInstruction;
+        string trigger = $"The player sent this /agent instruction: {playerInstruction}. Choose one action.";
+        _queuedInstruction = "";
+        StartMainRequest(trigger, playerInstruction);
+        return true;
+    }
+
+    private bool TryStartCallbackRequest()
+    {
+        if (string.IsNullOrWhiteSpace(_pendingCallbackReason))
+            return false;
+
+        string trigger = $"Action completed: {_pendingCallbackReason}. Choose the next action.";
+        _pendingCallbackReason = "";
+        StartMainRequest(trigger, playerInstruction: "");
+        return true;
+    }
+
+    private void StartMainRequest(string trigger, string playerInstruction)
+    {
+        if (LlmBridgeSystem.Instance == null)
+            return;
+
+        _requestSequence++;
+        _llm = LlmBridgeSystem.Instance.Request(
+            _llmAgentId,
+            SystemPrompt,
+            trigger,
+            BuildObservation(playerInstruction, trigger),
+            BuildOutputContract(),
+            timeoutMs: 30000);
+    }
+
+    private bool TryStartCompactRequest()
+    {
+        if (_shortTermMemory.Count < ShortTermMemoryLimit)
+            return false;
+        if (LlmBridgeSystem.Instance == null)
+            return false;
+
+        var batch = _shortTermMemory.ToArray();
+
+        _compactLlm = LlmBridgeSystem.Instance.Request(
+            _llmAgentId + ":memory",
+            "You compact short-term agent memory. Return only JSON matching the output contract.",
+            "Summarize these events into one durable memory sentence. Do not issue game actions.",
+            LlmObservation.Create()
+                .Use(Context.Custom("memory_compact", "events to compact")
+                    .Field("events", string.Join(" | ", batch), "short-term summaries")),
+            LlmOutput.Object("memory", "Save one durable long-term memory.")
+                .String("summary", required: true, maxLength: 240, description: "single compact memory summary"),
+            timeoutMs: 20000);
+        return true;
+    }
+
+    private LlmObservation BuildObservation(string playerInstruction, string trigger)
+    {
+        int radius = IsRecentScanAvailable() ? _lastScanRadius : 24;
         return LlmObservation.Create()
             .Use(TerrariaContext.Npc(NPC).Basic().Life())
             .Use(TerrariaContext.World().Time())
-            .Use(TerrariaContext.Tiles(NPC.Center, radiusTiles: 24).Area(maxSpecials: 12))
-            .Use(Context.Custom("input", "player instruction for this request")
-                .Field("text", instruction, "latest /agent command text"));
+            .Use(TerrariaContext.Tiles(NPC.Center, radiusTiles: radius).Area(maxSpecials: radius >= 48 ? 32 : 16))
+            .Use(Context.Custom("input", "request trigger")
+                .Field("seq", _requestSequence, "request sequence number")
+                .Field("text", playerInstruction, "latest /agent command text, empty for callback turns")
+                .Field("trigger", trigger, "why this request was made")
+                .Field("last_action", _lastActionSummary, "last action result"))
+            .Use(Context.Custom("mem", "example-only agent memory")
+                .Field("goal", string.Join(" | ", _goalMemory), "goal memory / todo list")
+                .Field("stm", string.Join(" | ", _shortTermMemory), "short term memory queue")
+                .Field("ltm", string.Join(" | ", _longTermMemory), "long term compact memory")
+                .Field("scan", IsRecentScanAvailable() ? $"large scan radius {_lastScanRadius}" : "none", "recent scanarea result"));
     }
 
-    /// <summary>Declares the only output shape this minimal example understands.</summary>
     private static LlmOutput BuildOutputContract()
     {
-        return LlmOutput.Object("talk", "Say a short in-game message.")
-            .String("text", required: true, maxLength: 80, description: "message to show above the NPC");
+        string callback_description = "true if the task is not yet complete and should continue";
+        return LlmOutput.OneOf(
+            WithMemoryFields(
+                LlmOutput.Object("say", "Say a short in-game message.")
+                    .String("text", required: true, maxLength: 100, description: "message to show above the NPC"),
+                callback_description),
+            WithMemoryFields(
+                LlmOutput.Object("moveto", "Move toward a target world position.")
+                    .Number("x", required: true, description: "target world x in pixels")
+                    .Number("y", required: true, description: "target world y in pixels"),
+                callback_description),
+            WithMemoryFields(
+                LlmOutput.Object("breaktiles", "Break nearby solid tiles in a small circle.")
+                    .Number("tile_x", required: true, description: "center tile x")
+                    .Number("tile_y", required: true, description: "center tile y")
+                    .Number("radius", required: true, defaultValue: 1, description: "tile radius, clamped to 0..5"),
+                callback_description),
+            WithMemoryFields(
+                LlmOutput.Object("scanarea", "Request a larger tile observation for the next LLM turn.")
+                    .Number("radius", required: true, defaultValue: 48, description: "scan radius in tiles, clamped to 24..80"),
+                callback_description),
+            WithMemoryFields(
+                LlmOutput.Object("plan", "Update goal memory / todo list.")
+                    .String("todo", required: true, maxLength: 240, description: "replacement todo list or concise plan"),
+                callback_description));
     }
 
-    /// <summary>Polls the non-blocking request handle and applies the completed result.</summary>
+    private static LlmObjectBuilder WithMemoryFields(LlmObjectBuilder output, string callbackDescription)
+    {
+        return output
+            .String("summary", required: true, maxLength: 320, description: "short summary of this request including what you observe, what you do and why")
+            .Boolean("callback", required: true, description: callbackDescription);
+    }
+
     private void PollLlm()
     {
-        if (_llm == null || !_llm.TryGetResult(out JsonNode? output) || output is not JsonObject obj)
+        if (_llm == null)
+            return;
+        if (_llm.IsPending)
             return;
 
-        string type = obj["type"]?.GetValue<string>() ?? "";
-        if (type == "talk")
-            Say(obj["text"]?.GetValue<string>() ?? "");
+        if (_llm.TryGetResult(out JsonNode? output) && output is JsonObject obj)
+        {
+            ApplyLlmOutput(obj);
+            EnqueueTurnSummary(obj);
+        }
+        else if (_llm.IsDone)
+            EnqueueTurnSummary(new JsonObject
+            {
+                ["type"] = "failed",
+                ["summary"] = $"request failed: {_llm.Error ?? _llm.Status.ToString()}",
+            });
 
         _llm = null;
     }
 
-    /// <summary>Displays the LLM response in chat and as overhead combat text.</summary>
+    private void ApplyLlmOutput(JsonObject obj)
+    {
+        string type = ReadString(obj, "type");
+        bool callback = ReadBool(obj, "callback");
+
+        switch (type)
+        {
+            case "say":
+                string text = ReadString(obj, "text");
+                Say(text);
+                FinishImmediateAction("say", string.IsNullOrWhiteSpace(text) ? "empty" : text, callback);
+                break;
+
+            case "moveto":
+                StartMove(ReadFloat(obj, "x", NPC.Center.X), ReadFloat(obj, "y", NPC.Center.Y), callback);
+                break;
+
+            case "breaktiles":
+                StartBreakTiles(
+                    ReadInt(obj, "tile_x", (int)(NPC.Center.X / 16f)),
+                    ReadInt(obj, "tile_y", (int)(NPC.Center.Y / 16f)),
+                    ReadInt(obj, "radius", 1),
+                    callback);
+                break;
+
+            case "scanarea":
+                StartScanArea(ReadInt(obj, "radius", 48), callback);
+                break;
+
+            case "plan":
+                UpdatePlan(ReadString(obj, "todo"), callback);
+                break;
+
+            default:
+                FinishImmediateAction("unknown", $"unsupported output type '{type}'", callback: false);
+                break;
+        }
+    }
+
+    private void StartMove(float x, float y, bool callback)
+    {
+        var target = new Vector2(x, y);
+        _action = new PendingAction(ActionKind.MoveTo, callback)
+        {
+            TargetWorld = target,
+            StartedTick = (int)Main.GameUpdateCount,
+            TimeoutTicks = MoveTimeoutTicks,
+        };
+        _lastActionSummary = $"moving to [{(int)x},{(int)y}]";
+    }
+
+    private void StartBreakTiles(int tileX, int tileY, int radius, bool callback)
+    {
+        radius = Math.Clamp(radius, 0, BreakTilesMaxRadius);
+        var targets = new Queue<Point>();
+        for (int y = tileY - radius; y <= tileY + radius; y++)
+        {
+            for (int x = tileX - radius; x <= tileX + radius; x++)
+            {
+                if (Vector2.Distance(new Vector2(x, y), new Vector2(tileX, tileY)) > radius + 0.01f)
+                    continue;
+                if (!WorldGen.InWorld(x, y, 10))
+                    continue;
+                Tile tile = Main.tile[x, y];
+                if (tile.HasTile && Main.tileSolid[tile.TileType])
+                    targets.Enqueue(new Point(x, y));
+            }
+        }
+
+        _action = new PendingAction(ActionKind.BreakTiles, callback)
+        {
+            TileTargets = targets,
+            StartedTick = (int)Main.GameUpdateCount,
+            TimeoutTicks = BreakTimeoutTicks,
+        };
+        _lastActionSummary = $"breaking {targets.Count} tiles near [{tileX},{tileY}]";
+    }
+
+    private void StartScanArea(int radius, bool callback)
+    {
+        _lastScanRadius = Math.Clamp(radius, 24, 80);
+        _lastScanTick = (int)Main.GameUpdateCount;
+        FinishImmediateAction("scanarea", $"large scan prepared with radius {_lastScanRadius}", callback);
+    }
+
+    private void UpdatePlan(string todo, bool callback)
+    {
+        _goalMemory.Clear();
+        foreach (string item in SplitMemoryItems(todo).Take(8))
+            _goalMemory.Add(item);
+        FinishImmediateAction("plan", $"goal memory updated: {string.Join(" | ", _goalMemory)}", callback);
+    }
+
+    private void UpdateAction()
+    {
+        if (_action == null)
+            return;
+
+        if (Main.GameUpdateCount - _action.StartedTick > _action.TimeoutTicks)
+        {
+            FinishAction(_action, $"{_action.Kind} timed out");
+            return;
+        }
+
+        switch (_action.Kind)
+        {
+            case ActionKind.MoveTo:
+                UpdateMove(_action);
+                break;
+            case ActionKind.BreakTiles:
+                UpdateBreakTiles(_action);
+                break;
+        }
+    }
+
+    private void UpdateMove(PendingAction action)
+    {
+        Vector2 delta = action.TargetWorld - NPC.Center;
+        if (delta.Length() <= 12f)
+        {
+            NPC.velocity = Vector2.Zero;
+            FinishAction(action, $"arrived at [{(int)NPC.Center.X},{(int)NPC.Center.Y}]");
+            return;
+        }
+
+        Vector2 desired = Vector2.Normalize(delta) * MoveSpeed;
+        NPC.velocity = Vector2.Lerp(NPC.velocity, desired, 0.2f);
+    }
+
+    private void UpdateBreakTiles(PendingAction action)
+    {
+        int perTick = 2;
+        int broken = 0;
+        while (perTick-- > 0 && action.TileTargets.Count > 0)
+        {
+            Point point = action.TileTargets.Dequeue();
+            if (!WorldGen.InWorld(point.X, point.Y, 10))
+                continue;
+            Tile tile = Main.tile[point.X, point.Y];
+            if (!tile.HasTile || !Main.tileSolid[tile.TileType])
+                continue;
+
+            WorldGen.KillTile(point.X, point.Y, fail: false, effectOnly: false, noItem: false);
+            if (Main.netMode == NetmodeID.Server)
+                NetMessage.SendData(MessageID.TileManipulation, -1, -1, null, 0, point.X, point.Y);
+            Dust.QuickDust(new Vector2(point.X * 16f + 8f, point.Y * 16f + 8f), Color.OrangeRed);
+            broken++;
+        }
+
+        action.BrokenTiles += broken;
+        if (action.TileTargets.Count == 0)
+            FinishAction(action, $"breaktiles completed, broke {action.BrokenTiles} tiles");
+    }
+
+    private void FinishImmediateAction(string action, string summary, bool callback)
+    {
+        _lastActionSummary = $"{action}: {summary}";
+        if (callback)
+            _pendingCallbackReason = _lastActionSummary;
+    }
+
+    private void FinishAction(PendingAction action, string summary)
+    {
+        _action = null;
+        NPC.velocity = Vector2.Zero;
+        _lastActionSummary = summary;
+        if (action.Callback)
+            _pendingCallbackReason = summary;
+    }
+
+    private void EnqueueTurnSummary(JsonObject obj)
+    {
+        // STM stores one compact model-authored note per normal request. Raw observation
+        // remains request-local and is never copied into memory.
+        string summary = ReadString(obj, "summary");
+        if (string.IsNullOrWhiteSpace(summary))
+        {
+            string type = ReadString(obj, "type");
+            summary = $"{type}: {_lastActionSummary}";
+        }
+
+        if (string.IsNullOrWhiteSpace(summary))
+            return;
+
+        _shortTermMemory.Enqueue(summary.Trim());
+        while (_shortTermMemory.Count > ShortTermMemoryLimit)
+            _shortTermMemory.Dequeue();
+    }
+
     private void Say(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
             return;
-        if (text.Length > 80)
-            text = text[..80];
+        if (text.Length > 100)
+            text = text[..100];
         Main.NewText($"<{NPC.FullName}> {text}", 200, 200, 100);
         CombatText.NewText(NPC.Hitbox, Color.Gold, text);
+    }
+
+    private void PollCompactLlm()
+    {
+        if (_compactLlm == null)
+            return;
+        if (_compactLlm.IsPending)
+            return;
+
+        if (_compactLlm.TryGetResult(out JsonNode? output) && output is JsonObject obj)
+        {
+            string summary = ReadString(obj, "summary");
+            if (!string.IsNullOrWhiteSpace(summary))
+            {
+                _longTermMemory.Add(summary);
+                while (_longTermMemory.Count > 6)
+                    _longTermMemory.RemoveAt(0);
+            }
+        }
+
+        _shortTermMemory.Clear();
+        _compactLlm = null;
+    }
+
+    private bool IsRecentScanAvailable()
+    {
+        return Main.GameUpdateCount - _lastScanTick <= ScanMemoryTicks;
+    }
+
+    private static IEnumerable<string> SplitMemoryItems(string text)
+    {
+        return (text ?? "")
+            .Split(new[] { '\n', ';', '|' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(item => item.Trim())
+            .Where(item => item.Length > 0);
+    }
+
+    private static string ReadString(JsonObject obj, string key)
+    {
+        return obj[key]?.GetValue<string>() ?? "";
+    }
+
+    private static bool ReadBool(JsonObject obj, string key)
+    {
+        return obj[key]?.GetValue<bool>() ?? false;
+    }
+
+    private static int ReadInt(JsonObject obj, string key, int fallback)
+    {
+        JsonNode? node = obj[key];
+        if (node == null)
+            return fallback;
+        try
+        {
+            return node.GetValueKind() == JsonValueKind.Number
+                ? (int)Math.Round(node.GetValue<double>())
+                : fallback;
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
+
+    private static float ReadFloat(JsonObject obj, string key, float fallback)
+    {
+        JsonNode? node = obj[key];
+        if (node == null)
+            return fallback;
+        try
+        {
+            return node.GetValueKind() == JsonValueKind.Number
+                ? (float)node.GetValue<double>()
+                : fallback;
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
+
+    private enum ActionKind
+    {
+        MoveTo,
+        BreakTiles,
+    }
+
+    private sealed class PendingAction
+    {
+        public PendingAction(ActionKind kind, bool callback)
+        {
+            Kind = kind;
+            Callback = callback;
+        }
+
+        public ActionKind Kind { get; }
+        public bool Callback { get; }
+        public int StartedTick { get; set; }
+        public int TimeoutTicks { get; set; }
+        public Vector2 TargetWorld { get; set; }
+        public Queue<Point> TileTargets { get; set; } = new();
+        public int BrokenTiles { get; set; }
     }
 }
