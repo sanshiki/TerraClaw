@@ -10,6 +10,7 @@ using Terraria;
 using Terraria.ID;
 using Terraria.ModLoader;
 using TerraClaw.LLM;
+using TerraClaw.Util;
 
 namespace TerraClaw.Agents.TerraClaw;
 
@@ -24,12 +25,14 @@ public sealed class ExampleTerraClawAgent : ModNPC
     private const int MoveTimeoutTicks = 60 * 20;
     private const int BreakTimeoutTicks = 60 * 12;
     private const int BreakTilesMaxRadius = 5;
-    private const float MoveSpeed = 4.5f;
+    private const float MoveAcc = 0.5f;
+    private const float MoveSpeed = 20f;
+    private const float MoveInertia = 20f;
     private const string SystemPrompt =
         "You are an AI controller inside Terraria. Return only JSON matching the requested output contract.\n\n" +
         "Terraria coordinate system:\n" +
-        "- World positions are measured in pixels as [x,y].\n" +
-        "- Tile positions are integer grid coordinates: tile_x = pixel_x / 16, tile_y = pixel_y / 16.\n" +
+        "- All coordinates exposed to you are tile coordinates.\n" +
+        "- Use integer tile coordinates [tile_x,tile_y] for movement, mining, and interpreting scans.\n" +
         "- X increases to the right. Y increases downward.\n" +
         "- You can fly through walls and ignore terrain blocking.\n" +
         "- Choose exactly one action each turn.\n" +
@@ -41,7 +44,6 @@ public sealed class ExampleTerraClawAgent : ModNPC
 
     private readonly string _llmAgentId = Guid.NewGuid().ToString();
     private readonly Queue<string> _shortTermMemory = new();
-    private readonly List<string> _longTermMemory = new();
     private readonly List<string> _goalMemory = new();
 
     private LlmRequestHandle? _llm;
@@ -52,16 +54,17 @@ public sealed class ExampleTerraClawAgent : ModNPC
     private string _queuedInstruction = "";
     private string _pendingCallbackReason = "";
     private string _lastActionSummary = "none";
+    private string _longTermMemory = "";
     private int _requestSequence;
     public override void SetStaticDefaults()
     {
-        Main.npcFrameCount[Type] = 4;
+        Main.npcFrameCount[Type] = 6;
     }
 
     public override void SetDefaults()
     {
-        NPC.width = 18;
-        NPC.height = 28;
+        NPC.width = 36;
+        NPC.height = 52;
         NPC.damage = 0;
         NPC.defense = 0;
         NPC.lifeMax = 9999;
@@ -82,6 +85,11 @@ public sealed class ExampleTerraClawAgent : ModNPC
         PollLlm();
         UpdateAction();
         MaybeStartNextRequest();
+
+        // apply deacc
+        NPC.velocity *= 0.9f;
+
+        UpdateAnimation();
     }
 
     public override void FindFrame(int frameHeight)
@@ -92,7 +100,7 @@ public sealed class ExampleTerraClawAgent : ModNPC
 
         NPC.frameCounter = 0;
         NPC.frame.Y += frameHeight;
-        if (NPC.frame.Y >= frameHeight * 4)
+        if (NPC.frame.Y >= frameHeight * Main.npcFrameCount[Type])
             NPC.frame.Y = 0;
     }
 
@@ -196,13 +204,14 @@ public sealed class ExampleTerraClawAgent : ModNPC
 
         _compactLlm = LlmBridgeSystem.Instance.Request(
             _llmAgentId + ":memory",
-            "You compact short-term agent memory. Return only JSON matching the output contract.",
-            "Summarize these events into one durable memory sentence. Do not issue game actions.",
+            "You update long-term memory for a Terraria agent. Return only JSON matching the output contract.",
+            "Merge the short-term memories into the existing long-term memory. Keep durable facts, goals, preferences, and useful world state. Drop transient chatter. Do not issue game actions.",
             LlmObservation.Create()
-                .Use(Context.Custom("memory_compact", "events to compact")
-                    .Field("events", string.Join(" | ", batch), "short-term summaries")),
-            LlmOutput.Object("memory", "Save one durable long-term memory.")
-                .String("summary", required: true, maxLength: 240, description: "single compact memory summary"),
+                .Use(Context.Custom("memory_compact", "long-term memory update")
+                    .Field("ltm", _longTermMemory, "existing long-term memory")
+                    .Field("stm", string.Join(" | ", batch), "short-term summaries to merge")),
+            LlmOutput.Object("memory", "Updated long-term memory.")
+                .String("updated_ltm", required: true, maxLength: 1000, description: "complete updated long-term memory string"),
             timeoutMs: 20000);
         return true;
     }
@@ -211,7 +220,8 @@ public sealed class ExampleTerraClawAgent : ModNPC
     {
         int radius = IsRecentScanAvailable() ? _lastScanRadius : 24;
         return LlmObservation.Create()
-            .Use(TerrariaContext.Npc(NPC).Basic().Life())
+            .Use(BuildAgentTileContext())
+            .Use(TerrariaContext.Npc(NPC).Life())
             .Use(TerrariaContext.World().Time())
             .Use(TerrariaContext.Tiles(NPC.Center, radiusTiles: radius).Area(maxSpecials: radius >= 48 ? 32 : 16))
             .Use(Context.Custom("input", "request trigger")
@@ -222,8 +232,17 @@ public sealed class ExampleTerraClawAgent : ModNPC
             .Use(Context.Custom("mem", "example-only agent memory")
                 .Field("goal", string.Join(" | ", _goalMemory), "goal memory / todo list")
                 .Field("stm", string.Join(" | ", _shortTermMemory), "short term memory queue")
-                .Field("ltm", string.Join(" | ", _longTermMemory), "long term compact memory")
+                .Field("ltm", _longTermMemory, "long term memory")
                 .Field("scan", IsRecentScanAvailable() ? $"large scan radius {_lastScanRadius}" : "none", "recent scanarea result"));
+    }
+
+    private CustomContextBuilder BuildAgentTileContext()
+    {
+        return Context.Custom("agent", "agent state using tile coordinates only")
+            .Field("name", NPC.FullName, "agent display name")
+            .Field("tile_x", (int)(NPC.Center.X / 16f), "current tile x")
+            .Field("tile_y", (int)(NPC.Center.Y / 16f), "current tile y")
+            .Field("dir", NPC.direction == 1 ? "right" : "left", "facing direction");
     }
 
     private static LlmOutput BuildOutputContract()
@@ -235,9 +254,9 @@ public sealed class ExampleTerraClawAgent : ModNPC
                     .String("text", required: true, maxLength: 100, description: "message to show above the NPC"),
                 callback_description),
             WithMemoryFields(
-                LlmOutput.Object("moveto", "Move toward a target world position.")
-                    .Number("x", required: true, description: "target world x in pixels")
-                    .Number("y", required: true, description: "target world y in pixels"),
+                LlmOutput.Object("moveto", "Move toward a target tile.")
+                    .Number("tile_x", required: true, description: "target tile x")
+                    .Number("tile_y", required: true, description: "target tile y"),
                 callback_description),
             WithMemoryFields(
                 LlmOutput.Object("breaktiles", "Break nearby solid tiles in a small circle.")
@@ -284,6 +303,38 @@ public sealed class ExampleTerraClawAgent : ModNPC
         _llm = null;
     }
 
+    private void UpdateAnimation()
+    {
+        NPC.rotation = NPC.velocity.X * 0.02f;
+
+        if (_llm == null)
+            return;
+        if (_llm.IsPending)
+            return;
+
+        if (_llm.TryGetResult(out JsonNode? output) && output is JsonObject obj)
+        {
+            string type = ReadString(obj, "type");
+
+            switch (type)
+            {
+                case "say":
+                    break;
+                case "moveto":
+                    break;
+                case "breaktiles":
+                    break;
+                case "scanarea":
+                    break;
+                case "plan":
+                    break;
+                default:
+                    break;
+            }
+        }
+            
+    }
+
     private void ApplyLlmOutput(JsonObject obj)
     {
         string type = ReadString(obj, "type");
@@ -298,7 +349,10 @@ public sealed class ExampleTerraClawAgent : ModNPC
                 break;
 
             case "moveto":
-                StartMove(ReadFloat(obj, "x", NPC.Center.X), ReadFloat(obj, "y", NPC.Center.Y), callback);
+                StartMove(
+                    ReadInt(obj, "tile_x", (int)(NPC.Center.X / 16f)),
+                    ReadInt(obj, "tile_y", (int)(NPC.Center.Y / 16f)),
+                    callback);
                 break;
 
             case "breaktiles":
@@ -323,16 +377,16 @@ public sealed class ExampleTerraClawAgent : ModNPC
         }
     }
 
-    private void StartMove(float x, float y, bool callback)
+    private void StartMove(int tileX, int tileY, bool callback)
     {
-        var target = new Vector2(x, y);
+        var target = new Vector2(tileX * 16f + 8f, tileY * 16f + 8f);
         _action = new PendingAction(ActionKind.MoveTo, callback)
         {
             TargetWorld = target,
             StartedTick = (int)Main.GameUpdateCount,
             TimeoutTicks = MoveTimeoutTicks,
         };
-        _lastActionSummary = $"moving to [{(int)x},{(int)y}]";
+        _lastActionSummary = $"moving to tile [{tileX},{tileY}]";
     }
 
     private void StartBreakTiles(int tileX, int tileY, int radius, bool callback)
@@ -404,13 +458,18 @@ public sealed class ExampleTerraClawAgent : ModNPC
         Vector2 delta = action.TargetWorld - NPC.Center;
         if (delta.Length() <= 12f)
         {
-            NPC.velocity = Vector2.Zero;
-            FinishAction(action, $"arrived at [{(int)NPC.Center.X},{(int)NPC.Center.Y}]");
+            FinishAction(action, $"arrived at tile [{(int)(NPC.Center.X / 16f)},{(int)(NPC.Center.Y / 16f)}]");
             return;
         }
 
-        Vector2 desired = Vector2.Normalize(delta) * MoveSpeed;
-        NPC.velocity = Vector2.Lerp(NPC.velocity, desired, 0.2f);
+        var target = action.TargetWorld;
+        float dist = Vector2.Distance(NPC.Center, target);
+
+        var dir = target - NPC.Center;
+        
+        NPC.velocity = AIHelper.HomeinToTarget(NPC.Center, NPC.velocity, target, MoveSpeed, MoveInertia);
+
+        NPC.direction = dir.X > 0 ? 1 : -1;
     }
 
     private void UpdateBreakTiles(PendingAction action)
@@ -448,7 +507,6 @@ public sealed class ExampleTerraClawAgent : ModNPC
     private void FinishAction(PendingAction action, string summary)
     {
         _action = null;
-        NPC.velocity = Vector2.Zero;
         _lastActionSummary = summary;
         if (action.Callback)
             _pendingCallbackReason = summary;
@@ -492,13 +550,9 @@ public sealed class ExampleTerraClawAgent : ModNPC
 
         if (_compactLlm.TryGetResult(out JsonNode? output) && output is JsonObject obj)
         {
-            string summary = ReadString(obj, "summary");
-            if (!string.IsNullOrWhiteSpace(summary))
-            {
-                _longTermMemory.Add(summary);
-                while (_longTermMemory.Count > 6)
-                    _longTermMemory.RemoveAt(0);
-            }
+            string updated = ReadString(obj, "updated_ltm");
+            if (!string.IsNullOrWhiteSpace(updated))
+                _longTermMemory = updated.Trim();
         }
 
         _shortTermMemory.Clear();
@@ -545,23 +599,6 @@ public sealed class ExampleTerraClawAgent : ModNPC
         }
     }
 
-    private static float ReadFloat(JsonObject obj, string key, float fallback)
-    {
-        JsonNode? node = obj[key];
-        if (node == null)
-            return fallback;
-        try
-        {
-            return node.GetValueKind() == JsonValueKind.Number
-                ? (float)node.GetValue<double>()
-                : fallback;
-        }
-        catch
-        {
-            return fallback;
-        }
-    }
-
     private enum ActionKind
     {
         MoveTo,
@@ -584,4 +621,10 @@ public sealed class ExampleTerraClawAgent : ModNPC
         public Queue<Point> TileTargets { get; set; } = new();
         public int BrokenTiles { get; set; }
     }
+}
+
+
+public class ExampleTerraClawAgentClaw : ModProjectile
+{
+    
 }
