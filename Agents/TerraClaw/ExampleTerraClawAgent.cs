@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Terraria;
+using Terraria.DataStructures;
 using Terraria.ID;
 using Terraria.ModLoader;
 using TerraClaw.LLM;
@@ -25,9 +26,15 @@ public sealed class ExampleTerraClawAgent : ModNPC
     private const int MoveTimeoutTicks = 60 * 20;
     private const int BreakTimeoutTicks = 60 * 12;
     private const int BreakTilesMaxRadius = 5;
-    private const float MoveAcc = 0.5f;
-    private const float MoveSpeed = 20f;
-    private const float MoveInertia = 20f;
+
+    // Movement constants
+    private const float MovingSpeed = 30f;
+    private const float LingeringSpeed = 2f;
+    private const float MovingInertia = 30f;
+    private const float LingeringInertia = 150f;
+    private const float LingeringRadius = 16f * 5f;
+    private const int LingeringUpdateTicks = 60;
+    private const float DampFactor = 0.91f;
     private const string SystemPrompt =
         "You are an AI controller inside Terraria. Return only JSON matching the requested output contract.\n\n" +
         "Terraria coordinate system:\n" +
@@ -56,6 +63,12 @@ public sealed class ExampleTerraClawAgent : ModNPC
     private string _lastActionSummary = "none";
     private string _longTermMemory = "";
     private int _requestSequence;
+    private Vector2 _target;
+    private Vector2 _lingerOffset;
+    private float _moveSpeed;
+    private float _moveInertia;
+    private int _lingerCnt = 60;
+
     public override void SetStaticDefaults()
     {
         Main.npcFrameCount[Type] = 6;
@@ -81,14 +94,14 @@ public sealed class ExampleTerraClawAgent : ModNPC
 
     public override void AI()
     {
+        Init();
+
         PollCompactLlm();
         PollLlm();
         UpdateAction();
         MaybeStartNextRequest();
 
-        // apply deacc
-        NPC.velocity *= 0.9f;
-
+        UpdateMovement();
         UpdateAnimation();
     }
 
@@ -163,6 +176,7 @@ public sealed class ExampleTerraClawAgent : ModNPC
         string playerInstruction = _queuedInstruction;
         string trigger = $"The player sent this /agent instruction: {playerInstruction}. Choose one action.";
         _queuedInstruction = "";
+        _pendingCallbackReason = "";
         StartMainRequest(trigger, playerInstruction);
         return true;
     }
@@ -303,36 +317,45 @@ public sealed class ExampleTerraClawAgent : ModNPC
         _llm = null;
     }
 
+    public override void OnSpawn(IEntitySource source)
+    {
+        _target = NPC.Center;
+    }
+
+    private void Init()
+    {
+        _moveSpeed = LingeringSpeed;
+        _moveInertia = LingeringInertia;
+    }
+
+    private void UpdateMovement()
+    {
+        Vector2 _curr_target = _target;
+        if (_action?.Kind != ActionKind.MoveTo)
+        {
+            if(_lingerCnt >= LingeringUpdateTicks)
+            {
+                _lingerOffset = new Vector2(LingeringRadius, 0)
+                    .RotatedBy(AIHelper.RandomFloat(-MathHelper.Pi, MathHelper.Pi));
+                _lingerCnt = 0;
+            }
+            _lingerCnt++;
+            _curr_target = _target+_lingerOffset;
+        }
+
+        NPC.velocity = AIHelper.HomeinToTarget(NPC.Center, NPC.velocity, _curr_target, _moveSpeed, _moveInertia);
+
+        // Main.NewText($"vel: {NPC.velocity}, dir: {NPC.direction}, target: {_target}, linger: {_lingerOffset}");
+
+        NPC.velocity *= DampFactor;
+    }
+
     private void UpdateAnimation()
     {
+        var dir = _target - NPC.Center;
         NPC.rotation = NPC.velocity.X * 0.02f;
-
-        if (_llm == null)
-            return;
-        if (_llm.IsPending)
-            return;
-
-        if (_llm.TryGetResult(out JsonNode? output) && output is JsonObject obj)
-        {
-            string type = ReadString(obj, "type");
-
-            switch (type)
-            {
-                case "say":
-                    break;
-                case "moveto":
-                    break;
-                case "breaktiles":
-                    break;
-                case "scanarea":
-                    break;
-                case "plan":
-                    break;
-                default:
-                    break;
-            }
-        }
-            
+        NPC.direction = dir.X > 0 ? 1 : -1;
+        NPC.spriteDirection = dir.X > 0 ? 1 : -1;
     }
 
     private void ApplyLlmOutput(JsonObject obj)
@@ -462,14 +485,9 @@ public sealed class ExampleTerraClawAgent : ModNPC
             return;
         }
 
-        var target = action.TargetWorld;
-        float dist = Vector2.Distance(NPC.Center, target);
-
-        var dir = target - NPC.Center;
-        
-        NPC.velocity = AIHelper.HomeinToTarget(NPC.Center, NPC.velocity, target, MoveSpeed, MoveInertia);
-
-        NPC.direction = dir.X > 0 ? 1 : -1;
+        _target = action.TargetWorld;
+        _moveSpeed = MovingSpeed;
+        _moveInertia = MovingInertia;
     }
 
     private void UpdateBreakTiles(PendingAction action)
@@ -574,12 +592,38 @@ public sealed class ExampleTerraClawAgent : ModNPC
 
     private static string ReadString(JsonObject obj, string key)
     {
-        return obj[key]?.GetValue<string>() ?? "";
+        JsonNode? node = obj[key];
+        if (node == null)
+            return "";
+        try
+        {
+            return node.GetValue<string>() ?? "";
+        }
+        catch
+        {
+            return node.ToJsonString();
+        }
     }
 
     private static bool ReadBool(JsonObject obj, string key)
     {
-        return obj[key]?.GetValue<bool>() ?? false;
+        JsonNode? node = obj[key];
+        if (node == null)
+            return false;
+        try
+        {
+            if (node.GetValueKind() == JsonValueKind.True || node.GetValueKind() == JsonValueKind.False)
+                return node.GetValue<bool>();
+            if (node.GetValueKind() == JsonValueKind.Number)
+                return node.GetValue<int>() != 0;
+            if (node.GetValueKind() == JsonValueKind.String)
+                return bool.TryParse(node.GetValue<string>(), out bool value) && value;
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static int ReadInt(JsonObject obj, string key, int fallback)
@@ -621,10 +665,4 @@ public sealed class ExampleTerraClawAgent : ModNPC
         public Queue<Point> TileTargets { get; set; } = new();
         public int BrokenTiles { get; set; }
     }
-}
-
-
-public class ExampleTerraClawAgentClaw : ModProjectile
-{
-    
 }

@@ -296,7 +296,7 @@ namespace TerraClaw.Util
 		public static Vector2 HomeinToTarget(Vector2 center, Vector2 vel, Vector2 target, float speed, float inertia)
 		{
 			Vector2 direction = target - center;
-			direction.Normalize();
+			direction = direction.SafeNormalize(Vector2.Zero);
 			direction *= speed;
 			return (vel * (inertia - 1) + direction) / inertia;
 		}
