@@ -56,6 +56,7 @@ public sealed class TileAreaComponent : ISymbolicContextProvider
         new SymbolicField("wall", "wall coverage ratio"),
         new SymbolicField("liquid", "dominant liquid type and approximate fill"),
         new SymbolicField("floor", "[dx,dy] nearest floor below center, or null"),
+        new SymbolicField("top_tiles", "most common tile types as [name,count,ratio]"),
         new SymbolicField("specials", "grouped notable tiles as [kind,name,count,dx,dy,flags]"),
     };
 
@@ -78,6 +79,7 @@ public sealed class TileAreaComponent : ISymbolicContextProvider
             ["floor"] = FloorToJson(scan),
             ["topology"] = TopologyToJson(scan),
             ["tags"] = StringListToJson(scan.Tags),
+            ["top_tiles"] = TopTilesToVerboseJson(scan.TopTiles),
             ["specials"] = SpecialsToVerboseJson(scan.Specials),
         };
     }
@@ -96,6 +98,7 @@ public sealed class TileAreaComponent : ISymbolicContextProvider
             scan.FloorDx.HasValue && scan.FloorDy.HasValue
                 ? new JsonArray(scan.FloorDx.Value, scan.FloorDy.Value)
                 : null,
+            TopTilesToSymbolicJson(scan.TopTiles),
             SpecialsToSymbolicJson(scan.Specials),
         };
     }
@@ -181,6 +184,31 @@ public sealed class TileAreaComponent : ISymbolicContextProvider
         return array;
     }
 
+    private static JsonArray TopTilesToVerboseJson(IReadOnlyList<TileCountEntry> topTiles)
+    {
+        var array = new JsonArray();
+        foreach (var tile in topTiles)
+        {
+            array.Add(new JsonObject
+            {
+                ["name"] = tile.Name,
+                ["type"] = tile.Type,
+                ["count"] = tile.Count,
+                ["ratio"] = tile.Ratio,
+            });
+        }
+
+        return array;
+    }
+
+    private static JsonArray TopTilesToSymbolicJson(IReadOnlyList<TileCountEntry> topTiles)
+    {
+        var array = new JsonArray();
+        foreach (var tile in topTiles)
+            array.Add(new JsonArray { tile.Name, tile.Count, tile.Ratio });
+        return array;
+    }
+
     private static JsonArray SpecialsToSymbolicJson(IReadOnlyList<TileSpecialEntry> specials)
     {
         var array = new JsonArray();
@@ -203,6 +231,7 @@ public sealed class TileAreaComponent : ISymbolicContextProvider
 internal sealed class TileScanSnapshot
 {
     private const int LiquidKinds = 4;
+    private const int TopTileKinds = 8;
 
     private TileScanSnapshot(
         int centerX,
@@ -219,6 +248,7 @@ internal sealed class TileScanSnapshot
         int? floorDy,
         TileTopology topology,
         IReadOnlyList<string> tags,
+        IReadOnlyList<TileCountEntry> topTiles,
         IReadOnlyList<TileSpecialEntry> specials)
     {
         CenterX = centerX;
@@ -238,6 +268,7 @@ internal sealed class TileScanSnapshot
         OpenToEdgeCount = topology.OpenToEdgeCount;
         BlockedBoundaryRatio = Math.Round(topology.BlockedBoundaryRatio, 2);
         Tags = tags;
+        TopTiles = topTiles;
         Specials = specials;
 
         int dominantLiquid = 0;
@@ -274,6 +305,7 @@ internal sealed class TileScanSnapshot
     public int OpenToEdgeCount { get; }
     public double BlockedBoundaryRatio { get; }
     public IReadOnlyList<string> Tags { get; }
+    public IReadOnlyList<TileCountEntry> TopTiles { get; }
     public IReadOnlyList<TileSpecialEntry> Specials { get; }
 
     public static TileScanSnapshot Build(Vector2 center, int radiusTiles, int maxSpecials)
@@ -301,6 +333,7 @@ internal sealed class TileScanSnapshot
         var liquidTiles = new int[LiquidKinds];
         var liquidFill = new int[LiquidKinds];
         var candidates = new List<TileSpecialEntry>();
+        var tileCounts = new Dictionary<int, int>();
 
         for (int dy = -radiusTiles; dy <= radiusTiles; dy++)
         {
@@ -353,6 +386,9 @@ internal sealed class TileScanSnapshot
 
                 if (!hasTile)
                     continue;
+
+                int tileType = tile.TileType;
+                tileCounts[tileType] = tileCounts.TryGetValue(tileType, out int count) ? count + 1 : 1;
 
                 var special = ClassifySpecialTile(tile, x, y, dx, dy);
                 if (special == null)
@@ -412,7 +448,35 @@ internal sealed class TileScanSnapshot
             topology.FloorDy,
             topology,
             tags,
+            SelectTopTiles(tileCounts, sampledTiles, TopTileKinds),
             SelectSpecials(candidates, maxSpecials));
+    }
+
+    private static IReadOnlyList<TileCountEntry> SelectTopTiles(Dictionary<int, int> tileCounts, int sampledTiles, int maxTiles)
+    {
+        if (maxTiles <= 0 || sampledTiles <= 0 || tileCounts.Count == 0)
+            return Array.Empty<TileCountEntry>();
+
+        var topTiles = new List<TileCountEntry>(tileCounts.Count);
+        foreach (var pair in tileCounts)
+        {
+            topTiles.Add(new TileCountEntry(
+                pair.Key,
+                GetTileName(pair.Key),
+                pair.Value,
+                Ratio(pair.Value, sampledTiles)));
+        }
+
+        topTiles.Sort((a, b) =>
+        {
+            int count = b.Count.CompareTo(a.Count);
+            return count != 0 ? count : string.Compare(a.Name, b.Name, StringComparison.Ordinal);
+        });
+
+        if (topTiles.Count <= maxTiles)
+            return topTiles;
+
+        return topTiles.GetRange(0, maxTiles);
     }
 
     private static IReadOnlyList<string> BuildTags(
@@ -984,6 +1048,12 @@ internal sealed record TileSpecialEntry(
             new[] { $"fill:{fill}" });
     }
 }
+
+internal sealed record TileCountEntry(
+    int Type,
+    string Name,
+    int Count,
+    double Ratio);
 
 internal sealed record TileTopology(
     bool FoundRegion,

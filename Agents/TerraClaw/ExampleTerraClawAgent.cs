@@ -46,6 +46,7 @@ public sealed class ExampleTerraClawAgent : ModNPC
         "- Use integer tile coordinates [tile_x,tile_y] for movement, mining, and interpreting scans.\n" +
         "- X increases to the right. Y increases downward.\n" +
         "- You can fly through walls and ignore terrain blocking.\n" +
+        "- Your observation can pass through all terrain blocks and walls without any collision obstruction.\n" +
         "- Choose exactly one action each turn.\n" +
         "- While the task goal is not yet complete, prefer callback=true so the agent keeps acting. \n" +
         "- If you need to await player's input, set callback=false so the agent waits for the next instruction turn.\n" +
@@ -366,9 +367,12 @@ public sealed class ExampleTerraClawAgent : ModNPC
     private void UpdateAnimation()
     {
         var dir = _target - NPC.Center;
-        NPC.rotation = NPC.velocity.X * 0.02f;
+        NPC.rotation = NPC.velocity.X * 0.03f;
         NPC.direction = dir.X > 0 ? 1 : -1;
-        NPC.spriteDirection = dir.X > 0 ? 1 : -1;
+        NPC.spriteDirection = -NPC.direction;
+
+        // add light
+        Lighting.AddLight(NPC.Center, 0.3f, 0.3f, 1f);
     }
 
     private void ApplyLlmOutput(JsonObject obj)
