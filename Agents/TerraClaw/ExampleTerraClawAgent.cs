@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Terraria;
 using Terraria.DataStructures;
+using Terraria.GameContent.UI;
 using Terraria.ID;
 using Terraria.ModLoader;
 using TerraClaw.LLM;
@@ -26,6 +27,9 @@ public sealed class ExampleTerraClawAgent : ModNPC
     private const int MoveTimeoutTicks = 60 * 20;
     private const int BreakTimeoutTicks = 60 * 12;
     private const int BreakTilesMaxRadius = 5;
+    private const int ClawEnsureIntervalTicks = 30;
+    private const int ActionEmoteDurationTicks = 90;
+    private const int ActionEmoteCooldownTicks = 30;
 
     // Movement constants
     private const float MovingSpeed = 30f;
@@ -68,6 +72,10 @@ public sealed class ExampleTerraClawAgent : ModNPC
     private float _moveSpeed;
     private float _moveInertia;
     private int _lingerCnt = 60;
+    private int _nextClawEnsureTick;
+    private int _nextActionEmoteTick;
+    private ProjectileReference _leftClawReference;
+    private ProjectileReference _rightClawReference;
 
     public override void SetStaticDefaults()
     {
@@ -90,6 +98,8 @@ public sealed class ExampleTerraClawAgent : ModNPC
         NPC.chaseable = false;
         NPC.hide = false;
         NPC.dontCountMe = true;
+        _leftClawReference.Clear();
+        _rightClawReference.Clear();
     }
 
     public override void AI()
@@ -101,6 +111,7 @@ public sealed class ExampleTerraClawAgent : ModNPC
         UpdateAction();
         MaybeStartNextRequest();
 
+        EnsureClaws();
         UpdateMovement();
         UpdateAnimation();
     }
@@ -320,6 +331,8 @@ public sealed class ExampleTerraClawAgent : ModNPC
     public override void OnSpawn(IEntitySource source)
     {
         _target = NPC.Center;
+        _leftClawReference.Clear();
+        _rightClawReference.Clear();
     }
 
     private void Init()
@@ -368,6 +381,7 @@ public sealed class ExampleTerraClawAgent : ModNPC
             case "say":
                 string text = ReadString(obj, "text");
                 Say(text);
+                ShowActionEmote(EmoteID.EmoteNote);
                 FinishImmediateAction("say", string.IsNullOrWhiteSpace(text) ? "empty" : text, callback);
                 break;
 
@@ -409,6 +423,7 @@ public sealed class ExampleTerraClawAgent : ModNPC
             StartedTick = (int)Main.GameUpdateCount,
             TimeoutTicks = MoveTimeoutTicks,
         };
+        ShowActionEmote(EmoteID.EmoteRun);
         _lastActionSummary = $"moving to tile [{tileX},{tileY}]";
     }
 
@@ -436,6 +451,7 @@ public sealed class ExampleTerraClawAgent : ModNPC
             StartedTick = (int)Main.GameUpdateCount,
             TimeoutTicks = BreakTimeoutTicks,
         };
+        ShowActionEmote(targets.Count > 0 ? EmoteID.ItemPickaxe : EmoteID.EmoteConfused);
         _lastActionSummary = $"breaking {targets.Count} tiles near [{tileX},{tileY}]";
     }
 
@@ -443,6 +459,7 @@ public sealed class ExampleTerraClawAgent : ModNPC
     {
         _lastScanRadius = Math.Clamp(radius, 24, 80);
         _lastScanTick = (int)Main.GameUpdateCount;
+        ShowActionEmote(EmoteID.EmotionAlert);
         FinishImmediateAction("scanarea", $"large scan prepared with radius {_lastScanRadius}", callback);
     }
 
@@ -451,6 +468,7 @@ public sealed class ExampleTerraClawAgent : ModNPC
         _goalMemory.Clear();
         foreach (string item in SplitMemoryItems(todo).Take(8))
             _goalMemory.Add(item);
+        ShowActionEmote(EmoteID.ItemCog);
         FinishImmediateAction("plan", $"goal memory updated: {string.Join(" | ", _goalMemory)}", callback);
     }
 
@@ -492,27 +510,146 @@ public sealed class ExampleTerraClawAgent : ModNPC
 
     private void UpdateBreakTiles(PendingAction action)
     {
-        int perTick = 2;
-        int broken = 0;
-        while (perTick-- > 0 && action.TileTargets.Count > 0)
-        {
-            Point point = action.TileTargets.Dequeue();
-            if (!WorldGen.InWorld(point.X, point.Y, 10))
-                continue;
-            Tile tile = Main.tile[point.X, point.Y];
-            if (!tile.HasTile || !Main.tileSolid[tile.TileType])
-                continue;
+        DispatchBreakTargets(action);
 
-            WorldGen.KillTile(point.X, point.Y, fail: false, effectOnly: false, noItem: false);
-            if (Main.netMode == NetmodeID.Server)
-                NetMessage.SendData(MessageID.TileManipulation, -1, -1, null, 0, point.X, point.Y);
-            Dust.QuickDust(new Vector2(point.X * 16f + 8f, point.Y * 16f + 8f), Color.OrangeRed);
-            broken++;
+        if (action.TileTargets.Count == 0 && action.InflightClawBreaks == 0)
+            FinishAction(action, $"breaktiles completed, broke {action.BrokenTiles} tiles");
+    }
+
+    private void DispatchBreakTargets(PendingAction action)
+    {
+        while (action.TileTargets.Count > 0)
+        {
+            if (!TryGetIdleClaw(out ExampleTerraClawAgentClaw? claw))
+                return;
+
+            Point point = action.TileTargets.Peek();
+            if (!IsBreakableTile(point))
+            {
+                action.TileTargets.Dequeue();
+                continue;
+            }
+
+            action.TileTargets.Dequeue();
+            claw.BeginBreakTile(point);
+            action.InflightClawBreaks++;
+        }
+    }
+
+    internal void NotifyClawBreakComplete(bool brokeTile)
+    {
+        if (_action?.Kind != ActionKind.BreakTiles)
+            return;
+        if (brokeTile)
+            _action.BrokenTiles++;
+    }
+
+    internal void NotifyClawReturned()
+    {
+        if (_action?.Kind != ActionKind.BreakTiles)
+            return;
+
+        if (_action.InflightClawBreaks > 0)
+            _action.InflightClawBreaks--;
+
+        if (_action.TileTargets.Count == 0 && _action.InflightClawBreaks == 0)
+            FinishAction(_action, $"breaktiles completed, broke {_action.BrokenTiles} tiles");
+    }
+
+    private void EnsureClaws()
+    {
+        int tick = (int)Main.GameUpdateCount;
+        if (tick < _nextClawEnsureTick)
+            return;
+
+        _nextClawEnsureTick = tick + ClawEnsureIntervalTicks;
+        EnsureClaw(side: -1);
+        EnsureClaw(side: 1);
+    }
+
+    private void EnsureClaw(int side)
+    {
+        if (Main.netMode == NetmodeID.MultiplayerClient)
+            return;
+        if (FindClaw(side) != null)
+            return;
+
+        int projectileIndex = Projectile.NewProjectile(
+            NPC.GetSource_FromAI(),
+            NPC.Center + new Vector2(side * 34f, 30f),
+            Vector2.Zero,
+            ModContent.ProjectileType<ExampleTerraClawAgentClaw>(),
+            0,
+            0f,
+            Main.myPlayer,
+            NPC.whoAmI,
+            side);
+
+        if (projectileIndex >= 0 && projectileIndex < Main.maxProjectiles)
+        {
+            ref ProjectileReference reference = ref GetClawReference(side);
+            reference.Set(Main.projectile[projectileIndex]);
+        }
+    }
+
+    private bool TryGetIdleClaw(out ExampleTerraClawAgentClaw? claw)
+    {
+        claw = FindClaw(side: -1);
+        if (claw?.CanAcceptBreakTarget == true)
+            return true;
+
+        claw = FindClaw(side: 1);
+        if (claw?.CanAcceptBreakTarget == true)
+            return true;
+
+        claw = null;
+        return false;
+    }
+
+    private ExampleTerraClawAgentClaw? FindClaw(int side)
+    {
+        int clawType = ModContent.ProjectileType<ExampleTerraClawAgentClaw>();
+        ref ProjectileReference reference = ref GetClawReference(side);
+        Projectile? cached = reference.IsValid() ? reference.Get() : null;
+        if (IsOwnedClaw(cached, clawType, side) && cached!.ModProjectile is ExampleTerraClawAgentClaw cachedClaw)
+            return cachedClaw;
+
+        reference.Clear();
+        for (int i = 0; i < Main.maxProjectiles; i++)
+        {
+            Projectile projectile = Main.projectile[i];
+            if (IsOwnedClaw(projectile, clawType, side) && projectile.ModProjectile is ExampleTerraClawAgentClaw claw)
+            {
+                reference.Set(projectile);
+                return claw;
+            }
         }
 
-        action.BrokenTiles += broken;
-        if (action.TileTargets.Count == 0)
-            FinishAction(action, $"breaktiles completed, broke {action.BrokenTiles} tiles");
+        return null;
+    }
+
+    private bool IsOwnedClaw(Projectile? projectile, int clawType, int side)
+    {
+        if (projectile == null || !projectile.active || projectile.type != clawType)
+            return false;
+        if ((int)projectile.ai[0] != NPC.whoAmI)
+            return false;
+        return (projectile.ai[1] < 0f ? -1 : 1) == side;
+    }
+
+    private ref ProjectileReference GetClawReference(int side)
+    {
+        if (side < 0)
+            return ref _leftClawReference;
+        return ref _rightClawReference;
+    }
+
+    private static bool IsBreakableTile(Point point)
+    {
+        if (!WorldGen.InWorld(point.X, point.Y, 10))
+            return false;
+        Tile tile = Main.tile[point.X, point.Y];
+        return tile.HasTile && Main.tileSolid[tile.TileType];
     }
 
     private void FinishImmediateAction(string action, string summary, bool callback)
@@ -524,10 +661,29 @@ public sealed class ExampleTerraClawAgent : ModNPC
 
     private void FinishAction(PendingAction action, string summary)
     {
+        if (action.Kind == ActionKind.BreakTiles)
+            RecallClaws();
+
         _action = null;
         _lastActionSummary = summary;
         if (action.Callback)
             _pendingCallbackReason = summary;
+    }
+
+    private void ShowActionEmote(int emoteId)
+    {
+        int tick = (int)Main.GameUpdateCount;
+        if (tick < _nextActionEmoteTick)
+            return;
+
+        EmoteBubble.NewBubble(emoteId, new WorldUIAnchor(NPC), ActionEmoteDurationTicks);
+        _nextActionEmoteTick = tick + ActionEmoteCooldownTicks;
+    }
+
+    private void RecallClaws()
+    {
+        FindClaw(side: -1)?.Recall();
+        FindClaw(side: 1)?.Recall();
     }
 
     private void EnqueueTurnSummary(JsonObject obj)
@@ -664,5 +820,6 @@ public sealed class ExampleTerraClawAgent : ModNPC
         public Vector2 TargetWorld { get; set; }
         public Queue<Point> TileTargets { get; set; } = new();
         public int BrokenTiles { get; set; }
+        public int InflightClawBreaks { get; set; }
     }
 }
