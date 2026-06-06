@@ -6,7 +6,7 @@
 /.claude/
 /bin/
 /docker/
-/TerraClaw.csproj.Iscache
+/TerraClaw.csproj.lscache
 /TerraClaw.sln
 /runtime/logs/
 /runtime/data/memory.db
