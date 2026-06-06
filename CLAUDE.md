@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Build C# mod (tModLoader)
-DO NOT build by yourself using 'dotnet build'! Remind the user to build using tmodloader when csharp compile is needed.
+dotnet build may be used as a quick local C# compile check. Still remind the user to run Build + Reload inside tModLoader for final validation.
 
 # Install Python runtime
 cd runtime && pip install -e .

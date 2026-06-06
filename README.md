@@ -46,7 +46,7 @@ $env:LLM_MODEL = "gpt-4o-mini"
 
 The in-game debug dashboard can be opened with `/terraclawdash` or the `Toggle LLM Dashboard` keybind.
 
-Do not use `dotnet build` as the source of truth for this tModLoader mod. Compile in tModLoader and paste compile errors when debugging C# changes.
+You may use `dotnet build` as a quick local C# compile check. It is not the source of truth for this tModLoader mod; still use Build + Reload inside tModLoader and paste compiler errors when debugging C# changes.
 
 ## LLM Framework
 
@@ -146,7 +146,7 @@ Missing fields fall back to environment variables:
 ## Development Notes
 
 - C# files target tModLoader/.NET 8 conventions.
-- Compile C# changes in tModLoader.
+- Use `dotnet build` for quick C# compile checks, then compile C# changes in tModLoader for final validation.
 - Use `/terraclawdash` or the dashboard keybind to inspect recent LLM requests and responses in-game.
 
 ## License

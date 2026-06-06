@@ -215,7 +215,7 @@ switch (type) {
 
 ## Validation
 
-Do not use `dotnet build` as validation for this tModLoader project. Build + Reload in tModLoader and fix compiler errors from there.
+Use `dotnet build` as a quick local C# compile check when useful. It is not final validation for this tModLoader project; still Build + Reload in tModLoader and fix any compiler or runtime errors from there.
 
 Python-only changes can be checked with:
 

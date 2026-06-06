@@ -8,7 +8,7 @@ Legacy Python-driven files remain under `runtime/src/terraclaw_runtime/agent/` a
 
 ## Build, Test, and Development Commands
 
-- Compile C# only inside tModLoader using Build + Reload. Do not use `dotnet build` for validation.
+- `dotnet build` may be used as a quick local C# compile check. Still remind the user to run Build + Reload inside tModLoader for final validation.
 - `cd runtime; pip install -e .[dev]`: installs Python runtime and developer tools.
 - `cd runtime; pytest`: runs Python tests.
 - `cd runtime; ruff check .`: lints Python code.
@@ -27,7 +27,7 @@ New agents should be normal `ModNPC`, `GlobalNPC`, `ModSystem`, or other tModLoa
 
 ## Testing Guidelines
 
-For C# changes, compile in tModLoader and test in-game. Paste compiler errors back into the task when needed. For Python changes, run `pytest`; add focused tests under `runtime/tests/` for prompt formatting, worker behavior, and message handling.
+For C# changes, `dotnet build` is acceptable for a fast local compile check, but final validation should still be Build + Reload inside tModLoader plus in-game testing. Paste compiler errors back into the task when needed. For Python changes, run `pytest`; add focused tests under `runtime/tests/` for prompt formatting, worker behavior, and message handling.
 
 ## Commit & Pull Request Guidelines
 
