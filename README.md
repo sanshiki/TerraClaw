@@ -1,32 +1,30 @@
 # TerraClaw
 
-TerraClaw is a tModLoader bridge for connecting Terraria mod code to an LLM. It provides model-call plumbing, observation and prompt packaging hooks, structured output contracts, and in-game debugging tools that other systems can build on.
+TerraClaw is a C#-first tModLoader LLM framework. It lets Terraria mod code build compact observations, declare structured output contracts, send non-blocking model requests, validate model output, and inspect requests in an in-game dashboard.
 
 ## Architecture
 
 ```text
 [tModLoader mod code]
-  build observation + output contract
+  build LlmObservation + LlmOutput
   render flat symbolic prompt
-  call OpenAI/openai-compatible model
+  call OpenAI/openai-compatible model from C#
+  validate structured JSON output
   poll LlmRequestHandle
-  apply structured output locally
+  apply behavior locally
 ```
 
 ## Project Structure
 
 ```text
-Agents/
-  Guide/                         # Vanilla Guide reactive talking agent
-    GuideLlmGlobalNPC.cs
-  TerraClaw/                     # Floating demo NPC agent
-    ExampleTerraClawAgent.cs
-LLM/                             # LLM request/contract/prompt/model framework
-Core/, Network/, Event/          # Bridge systems and shared event plumbing
-Observation/                     # Reusable observation extractors
-UI/                              # In-game LLM dashboard
-Util/                            # Shared helpers
-docs/                            # API documentation
+Agents/                 # Example C# agents
+API/, Interfaces/       # Public framework API and contracts
+LLM/                    # LLM request, prompt, validation, and result reader framework
+Core/                   # In-game commands
+Observation/            # Reusable extraction helpers used by context providers
+UI/                     # In-game LLM dashboard
+Util/                   # Shared helpers
+docs/                   # API documentation
 ```
 
 ## Quick Start
@@ -46,14 +44,12 @@ $env:LLM_MODEL = "gpt-4o-mini"
 
 The in-game debug dashboard can be opened with `/terraclawdash` or the `Toggle LLM Dashboard` keybind.
 
-You may use `dotnet build` as a quick local C# compile check. It is not the source of truth for this tModLoader mod; still use Build + Reload inside tModLoader and paste compiler errors when debugging C# changes.
-
 ## LLM Framework
 
 Mod code calls:
 
 ```csharp
-LlmBridgeSystem.Instance.Request(
+LlmRequestHandle handle = LlmBridgeSystem.Instance.Request(
     agentId,
     systemPrompt,
     instruction,
@@ -62,11 +58,19 @@ LlmBridgeSystem.Instance.Request(
     timeoutMs);
 ```
 
-The request returns an `LlmRequestHandle`. Callers keep running every frame and poll the handle later:
+Requests are non-blocking. Poll the handle later from normal tModLoader hooks:
+
+```csharp
+if (handle.TryGetResult(out LlmResult result) && result.Is("talk")) {
+    string text = result.String("text");
+}
+```
+
+The raw JSON path is still available when needed:
 
 ```csharp
 if (handle.TryGetResult(out JsonNode? output)) {
-    // apply JSON result locally
+    // custom parsing
 }
 ```
 
@@ -82,8 +86,6 @@ var observation = LlmObservation.Create()
         .Field("trigger", trigger));
 ```
 
-Use built-in components for common Terraria state, `Context.Custom(...)` for small agent-owned state, and `ISymbolicContextProvider` when a feature needs custom collection logic.
-
 Output contracts are built with `LlmOutput`:
 
 ```csharp
@@ -93,25 +95,19 @@ var output = LlmOutput.OneOf(
 );
 ```
 
-`ISymbolicContextProvider` and `LlmOutput` both generate compact prompt metadata automatically. The prompt builder sends the LLM a flat symbolic observation and flat output contract instead of verbose raw JSON.
+`LlmOutput` generates prompt metadata and validates completed model output before the request handle is marked completed. Invalid output fails the request with a dashboard-visible validation error.
 
-See [C# Agent API](docs/CSHARP_AGENT_API.md) for implementation details and examples.
+See [C# Agent API](docs/CSHARP_AGENT_API.md) and [Framework API](docs/FRAMEWORK_API.md) for implementation details and public API usage.
 
 ## Examples
 
 ### Guide Agent
 
-The mod includes examples that connect NPC behavior to an LLM. `Agents/Guide/GuideLlmGlobalNPC.cs` attaches to vanilla `NPCID.Guide` through `GlobalNPC`. It does not override movement or vanilla AI. It only:
-
-- observes Guide/world/nearby hostile state,
-- sends low-frequency or state-change LLM requests,
-- displays immediate `combat_text`,
-- caches `cached_text` for right-click Guide chat,
-- maintains a simple `Emotion` state.
+`Agents/Guide/GuideLlmGlobalNPC.cs` attaches to vanilla `NPCID.Guide` through `GlobalNPC`. It leaves vanilla AI untouched while producing immediate overhead text, cached right-click chat, and a small emotion state.
 
 ### TerraClaw Demo Agent
 
-`Agents/TerraClaw/ExampleTerraClawAgent.cs` is a self-contained `ModNPC` demo. `AgentSpawner` spawns it directly, `/agent ...` sends it one instruction, and its `AI()` method sends a non-blocking LLM request, polls the result, and displays a short `talk` response.
+`Agents/TerraClaw/ExampleTerraClawAgent.cs` is a self-contained `ModNPC` demo. `AgentSpawner` spawns it directly, `/agent ...` sends it one instruction, and its `AI()` method sends non-blocking LLM requests, polls results, and applies local actions such as talking, moving, scanning, and breaking tiles.
 
 ## Configuration
 
@@ -146,9 +142,19 @@ Missing fields fall back to environment variables:
 ## Development Notes
 
 - C# files target tModLoader/.NET 8 conventions.
-- Use `dotnet build` for quick C# compile checks, then compile C# changes in tModLoader for final validation.
-- Use `/terraclawdash` or the dashboard keybind to inspect recent LLM requests and responses in-game.
+- Final C# validation should be Build + Reload inside tModLoader plus in-game testing.
+- Use `/terraclawdash` or the dashboard keybind to inspect recent LLM requests, validation errors, and responses in-game.
 
 ## License
 
 MIT
+
+## TODO
+
+- [ ] ReAct paradigm
+  - Realtime, interactive, and game-loop friendly rather than a blocking agent loop.
+  - Current `callback` mechanism in `ExampleTerraClawAgent` can be a reference.
+- [ ] Memory Interface
+  - Long/short-term memory storage and compaction.
+  - Semantic memory over embeddings.
+  - Spatial knowledge graph over world state.

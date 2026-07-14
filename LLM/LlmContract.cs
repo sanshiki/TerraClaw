@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -251,6 +252,24 @@ internal sealed class CustomSymbolicContextProvider : ISymbolicContextProvider
     public JsonArray ToSymbolicValues() => _values.DeepClone().AsArray();
 }
 
+/// <summary>Result of validating raw LLM output against a TerraClaw output contract.</summary>
+public sealed class LlmOutputValidationResult
+{
+    public LlmOutputValidationResult(bool isValid, IReadOnlyList<string> errors)
+    {
+        IsValid = isValid;
+        Errors = errors;
+    }
+
+    public bool IsValid { get; }
+    public IReadOnlyList<string> Errors { get; }
+    public string ErrorMessage => string.Join("; ", Errors);
+
+    public static LlmOutputValidationResult Valid { get; } = new(true, Array.Empty<string>());
+
+    public static LlmOutputValidationResult Invalid(params string[] errors) => new(false, errors);
+}
+
 public sealed class LlmOutput
 {
     private readonly JsonObject _schema;
@@ -300,6 +319,13 @@ public sealed class LlmOutput
         if (!string.IsNullOrWhiteSpace(_description))
             result["description"] = _description;
         return result;
+    }
+
+
+    /// <summary>Validates raw LLM output against this contract's TerraClaw output semantics.</summary>
+    public LlmOutputValidationResult Validate(JsonNode? output)
+    {
+        return LlmOutputValidator.Validate(output, _flat);
     }
 
     private static LlmOutput Composite(string key, string description, LlmOutput[] outputs)
@@ -456,3 +482,331 @@ public sealed class LlmObjectBuilder
         return this;
     }
 }
+
+internal static class LlmOutputValidator
+{
+    public static LlmOutputValidationResult Validate(JsonNode? output, JsonObject flat)
+    {
+        if (output == null)
+            return LlmOutputValidationResult.Invalid("Output is null.");
+
+        string mode = flat["mode"]?.GetValue<string>() ?? "object";
+        JsonArray choices = flat["choices"] as JsonArray ?? new JsonArray();
+        return mode switch
+        {
+            "one" => ValidateOne(output, choices),
+            "any" => ValidateAny(output, choices),
+            "all" => ValidateAll(output, choices),
+            _ => ValidateSingleObject(output, choices),
+        };
+    }
+
+    private static LlmOutputValidationResult ValidateSingleObject(JsonNode output, JsonArray choices)
+    {
+        if (output is not JsonObject obj)
+            return LlmOutputValidationResult.Invalid("Output must be a JSON object.");
+
+        var errors = new List<string>();
+        if (TryValidateTypedBranch(obj, choices, out _, errors))
+            return LlmOutputValidationResult.Valid;
+        return new LlmOutputValidationResult(false, errors.Count > 0 ? errors : new List<string> { "Output did not match any branch." });
+    }
+
+    private static LlmOutputValidationResult ValidateOne(JsonNode output, JsonArray choices)
+    {
+        if (output is not JsonObject obj)
+            return LlmOutputValidationResult.Invalid("Output must be one JSON object.");
+
+        int matches = CountTypedMatches(obj, choices, out var errors);
+        if (matches == 1)
+            return LlmOutputValidationResult.Valid;
+        if (matches == 0)
+            return new LlmOutputValidationResult(false, errors.Count > 0 ? errors : new List<string> { "Output did not match any branch." });
+        return LlmOutputValidationResult.Invalid("Output matched more than one branch.");
+    }
+
+    private static LlmOutputValidationResult ValidateAny(JsonNode output, JsonArray choices)
+    {
+        if (output is JsonArray array)
+            return ValidateAnyArray(array, choices);
+
+        if (output is JsonObject obj && obj["outputs"] is JsonArray outputs)
+            return ValidateAnyArray(outputs, choices);
+
+        if (output is JsonObject keyed && keyed["type"] == null)
+            return ValidateAnyKeyedObject(keyed, choices);
+
+        return ValidateOne(output, choices);
+    }
+
+    private static LlmOutputValidationResult ValidateAnyArray(JsonArray array, JsonArray choices)
+    {
+        var errors = new List<string>();
+        if (array.Count == 0)
+            errors.Add("Output array must contain at least one item.");
+
+        for (int i = 0; i < array.Count; i++)
+        {
+            if (array[i] is not JsonObject item)
+            {
+                errors.Add($"Output item {i} must be an object.");
+                continue;
+            }
+
+            if (CountTypedMatches(item, choices, out var itemErrors) != 1)
+                errors.AddRange(itemErrors.Select(error => $"Item {i}: {error}"));
+        }
+
+        return errors.Count == 0 ? LlmOutputValidationResult.Valid : new LlmOutputValidationResult(false, errors);
+    }
+
+    private static LlmOutputValidationResult ValidateAnyKeyedObject(JsonObject keyed, JsonArray choices)
+    {
+        var errors = new List<string>();
+        int matched = 0;
+        foreach (var choice in Choices(choices))
+        {
+            string type = ChoiceType(choice);
+            if (string.IsNullOrWhiteSpace(type) || keyed[type] == null)
+                continue;
+
+            if (keyed[type] is JsonObject branchObject)
+            {
+                ValidateBranchFields(branchObject, choice, requireType: false, errors, type);
+                matched++;
+            }
+            else if (keyed[type] is JsonValue value)
+            {
+                ValidateScalarKeyedBranch(value, choice, errors, type);
+                matched++;
+            }
+            else
+            {
+                errors.Add($"Branch '{type}' must be an object or scalar value.");
+            }
+        }
+
+        if (matched == 0)
+            errors.Add("Output did not include any known branch.");
+        return errors.Count == 0 ? LlmOutputValidationResult.Valid : new LlmOutputValidationResult(false, errors);
+    }
+
+    private static LlmOutputValidationResult ValidateAll(JsonNode output, JsonArray choices)
+    {
+        var errors = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (output is JsonArray array)
+        {
+            ValidateBranchArray(array, choices, seen, errors);
+        }
+        else if (output is JsonObject obj && obj["outputs"] is JsonArray outputs)
+        {
+            ValidateBranchArray(outputs, choices, seen, errors);
+        }
+        else if (output is JsonObject keyed)
+        {
+            foreach (var choice in Choices(choices))
+            {
+                string type = ChoiceType(choice);
+                if (string.IsNullOrWhiteSpace(type) || keyed[type] == null)
+                    continue;
+
+                if (keyed[type] is JsonObject branchObject)
+                {
+                    ValidateBranchFields(branchObject, choice, requireType: false, errors, type);
+                    seen.Add(type);
+                }
+                else if (keyed[type] is JsonValue value)
+                {
+                    ValidateScalarKeyedBranch(value, choice, errors, type);
+                    seen.Add(type);
+                }
+                else
+                {
+                    errors.Add($"Branch '{type}' must be an object or scalar value.");
+                }
+            }
+
+            if (keyed["type"] is JsonValue)
+            {
+                if (TryValidateTypedBranch(keyed, choices, out string? matchedType, errors) && matchedType != null)
+                    seen.Add(matchedType);
+            }
+        }
+        else
+        {
+            errors.Add("Output must be an object, an array, or an object with an outputs array.");
+        }
+
+        foreach (var choice in Choices(choices))
+        {
+            string type = ChoiceType(choice);
+            if (!string.IsNullOrWhiteSpace(type) && !seen.Contains(type))
+                errors.Add($"Missing branch '{type}'.");
+        }
+
+        return errors.Count == 0 ? LlmOutputValidationResult.Valid : new LlmOutputValidationResult(false, errors);
+    }
+
+    private static void ValidateBranchArray(JsonArray array, JsonArray choices, HashSet<string> seen, List<string> errors)
+    {
+        for (int i = 0; i < array.Count; i++)
+        {
+            if (array[i] is not JsonObject item)
+            {
+                errors.Add($"Output item {i} must be an object.");
+                continue;
+            }
+
+            var itemErrors = new List<string>();
+            if (TryValidateTypedBranch(item, choices, out string? matchedType, itemErrors) && matchedType != null)
+                seen.Add(matchedType);
+            else
+                errors.AddRange(itemErrors.Select(error => $"Item {i}: {error}"));
+        }
+    }
+
+    private static bool TryValidateTypedBranch(JsonObject obj, JsonArray choices, out string? matchedType, List<string> errors)
+    {
+        matchedType = null;
+        int startErrorCount = errors.Count;
+        string actualType = obj["type"]?.GetValue<string>() ?? "";
+        if (string.IsNullOrWhiteSpace(actualType))
+        {
+            errors.Add("Output object is missing required 'type'.");
+            return false;
+        }
+
+        JsonObject? choice = FindChoice(choices, actualType);
+        if (choice == null)
+        {
+            errors.Add($"Unknown output type '{actualType}'.");
+            return false;
+        }
+
+        ValidateBranchFields(obj, choice, requireType: true, errors, actualType);
+        if (errors.Count == startErrorCount)
+        {
+            matchedType = actualType;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static int CountTypedMatches(JsonObject obj, JsonArray choices, out List<string> errors)
+    {
+        errors = new List<string>();
+        var localErrors = new List<string>();
+        bool matched = TryValidateTypedBranch(obj, choices, out _, localErrors);
+        if (matched)
+            return 1;
+        errors.AddRange(localErrors);
+        return 0;
+    }
+
+    private static void ValidateBranchFields(JsonObject obj, JsonObject choice, bool requireType, List<string> errors, string branchType)
+    {
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (requireType)
+            allowed.Add("type");
+
+        foreach (var field in Fields(choice))
+        {
+            string name = field["name"]?.GetValue<string>() ?? "";
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            allowed.Add(name);
+            bool required = field["required"]?.GetValue<bool>() == true;
+            JsonNode? value = obj[name];
+            if (value == null)
+            {
+                if (required)
+                    errors.Add($"Branch '{branchType}' is missing required field '{name}'.");
+                continue;
+            }
+
+            ValidateFieldValue(value, field, errors, branchType, name);
+        }
+
+        foreach (var property in obj)
+        {
+            if (!allowed.Contains(property.Key))
+                errors.Add($"Branch '{branchType}' has unknown field '{property.Key}'.");
+        }
+    }
+
+    private static void ValidateScalarKeyedBranch(JsonValue value, JsonObject choice, List<string> errors, string branchType)
+    {
+        JsonObject? firstRequired = Fields(choice).FirstOrDefault(field => field["required"]?.GetValue<bool>() == true);
+        if (firstRequired == null)
+        {
+            errors.Add($"Branch '{branchType}' does not accept a scalar value.");
+            return;
+        }
+
+        ValidateFieldValue(value, firstRequired, errors, branchType, firstRequired["name"]?.GetValue<string>() ?? "value");
+    }
+
+    private static void ValidateFieldValue(JsonNode value, JsonObject field, List<string> errors, string branchType, string fieldName)
+    {
+        string expectedType = field["type"]?.GetValue<string>() ?? "any";
+        bool typeOk = expectedType switch
+        {
+            "string" => value is JsonValue stringValue && stringValue.TryGetValue<string>(out _),
+            "number" => value is JsonValue numberValue && (numberValue.TryGetValue<double>(out _) || numberValue.TryGetValue<int>(out _)),
+            "boolean" => value is JsonValue boolValue && boolValue.TryGetValue<bool>(out _),
+            _ => true,
+        };
+
+        if (!typeOk)
+        {
+            errors.Add($"Branch '{branchType}' field '{fieldName}' must be {expectedType}.");
+            return;
+        }
+
+        if (expectedType == "string" && field["max"] is JsonNode maxNode)
+        {
+            int max = maxNode.GetValue<int>();
+            string text = value.GetValue<string>();
+            if (text.Length > max)
+                errors.Add($"Branch '{branchType}' field '{fieldName}' exceeds max length {max}.");
+        }
+    }
+
+    private static JsonObject? FindChoice(JsonArray choices, string type)
+    {
+        return Choices(choices).FirstOrDefault(choice => string.Equals(ChoiceType(choice), type, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string ChoiceType(JsonObject choice) => choice["type"]?.GetValue<string>() ?? "";
+
+    private static IEnumerable<JsonObject> Choices(JsonArray choices)
+    {
+        foreach (var choice in choices)
+        {
+            if (choice is JsonObject obj)
+                yield return obj;
+        }
+    }
+
+    private static IEnumerable<JsonObject> Fields(JsonObject choice)
+    {
+        if (choice["fields"] is not JsonArray fields)
+            yield break;
+
+        foreach (var field in fields)
+        {
+            if (field is JsonObject obj)
+                yield return obj;
+        }
+    }
+}
+
+
+
+
+
+

@@ -2,12 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
-using TerraClaw.Core;
-using TerraClaw.Network;
 using TerraClaw.UI;
 using Terraria;
 using Terraria.ModLoader;
@@ -61,11 +58,13 @@ public sealed class LlmBridgeSystem : ModSystem
             int elapsedMs = (int)((Main.GameUpdateCount - handle.StartedTick) * (1000.0 / 60.0));
             if (elapsedMs > handle.TimeoutMs)
             {
-                handle.Timeout();
+                TimeoutHandle(handle);
                 RemovePending(handle.RequestId);
                 DisposeCancellation(handle.RequestId, cancel: true);
             }
         }
+
+        global::TerraClaw.TerraClaw.Api?.FlushQueuedEvents();
     }
 
     /// <summary>
@@ -97,6 +96,7 @@ public sealed class LlmBridgeSystem : ModSystem
             _cancellations[requestId] = cancellation;
         }
 
+        global::TerraClaw.TerraClaw.Api?.NotifyLlmRequestStarted(handle);
         _ = RunRequestAsync(handle, system, instruction, observation, output, cancellation.Token);
         return handle;
     }
@@ -105,36 +105,9 @@ public sealed class LlmBridgeSystem : ModSystem
     public void Cancel(string requestId)
     {
         if (TryGetPending(requestId, out var handle))
-            handle.MarkCancelled();
+            CancelHandle(handle);
         DisposeCancellation(requestId, cancel: true);
         RemovePending(requestId);
-    }
-
-    /// <summary>Applies an <c>llm.response</c> payload received from the bridge network layer.</summary>
-    public void HandleResponse(JsonElement payload)
-    {
-        string requestId = payload.TryGetProperty("request_id", out var rid) ? rid.GetString() ?? "" : "";
-        if (string.IsNullOrEmpty(requestId) || !TryGetPending(requestId, out var handle))
-            return;
-
-        string status = payload.TryGetProperty("status", out var st) ? st.GetString() ?? "" : "";
-        if (status == "completed")
-        {
-            JsonNode? output = null;
-            if (payload.TryGetProperty("output", out var outEl))
-                output = JsonNode.Parse(outEl.GetRawText());
-            handle.Complete(output);
-        }
-        else
-        {
-            string error = "LLM request failed";
-            if (payload.TryGetProperty("error", out var err))
-                error = err.GetString() ?? error;
-            handle.Fail(error);
-        }
-
-        RemovePending(requestId);
-        DisposeCancellation(requestId, cancel: false);
     }
 
     private async Task RunRequestAsync(
@@ -174,6 +147,15 @@ public sealed class LlmBridgeSystem : ModSystem
                 outputContract,
                 linked.Token);
 
+            LlmOutputValidationResult validation = output.Validate(result);
+            if (!validation.IsValid)
+            {
+                string error = "LLM output failed validation: " + validation.ErrorMessage;
+                PublishDebugResult(handle, "failed", stopwatch.Elapsed, result, error);
+                FailHandle(handle, error);
+                return;
+            }
+
             PublishDebugResult(handle, "completed", stopwatch.Elapsed, result, error: null);
             CompleteHandle(handle, result);
         }
@@ -208,22 +190,6 @@ public sealed class LlmBridgeSystem : ModSystem
         JsonObject symbolicObservation,
         JsonObject outputContract)
     {
-        var payload = new JsonObject
-        {
-            ["request_id"] = handle.RequestId,
-            ["agent_id"] = handle.AgentId,
-            ["instruction"] = instruction,
-            ["timeout_ms"] = handle.TimeoutMs,
-            ["observation"] = observation.DeepClone(),
-            ["symbolic_observation"] = symbolicObservation.DeepClone(),
-            ["output_contract"] = outputContract.DeepClone(),
-        };
-
-        var keys = new JsonArray();
-        foreach (string key in observation.Select(pair => pair.Key))
-            keys.Add(key);
-        payload["observation_keys"] = keys;
-
         LlmDebugLog.AddRequest(
             handle.RequestId,
             handle.AgentId,
@@ -233,8 +199,6 @@ public sealed class LlmBridgeSystem : ModSystem
             symbolicObservation,
             outputContract,
             observation.Select(pair => pair.Key).ToArray());
-
-        BroadcastDebug("llm.debug.request", payload);
     }
 
     private static void PublishDebugResult(
@@ -244,19 +208,6 @@ public sealed class LlmBridgeSystem : ModSystem
         JsonNode? output,
         string? error)
     {
-        var payload = new JsonObject
-        {
-            ["request_id"] = handle.RequestId,
-            ["agent_id"] = handle.AgentId,
-            ["status"] = status,
-            ["duration_s"] = Math.Round(duration.TotalSeconds, 2),
-        };
-
-        if (output != null)
-            payload["output"] = output.DeepClone();
-        if (!string.IsNullOrWhiteSpace(error))
-            payload["error"] = error;
-
         LlmDebugLog.AddResult(
             handle.RequestId,
             handle.AgentId,
@@ -264,19 +215,6 @@ public sealed class LlmBridgeSystem : ModSystem
             Math.Round(duration.TotalSeconds, 2),
             output,
             error);
-
-        BroadcastDebug("llm.debug.result", payload);
-    }
-
-    private static void BroadcastDebug(string type, JsonObject payload)
-    {
-        try
-        {
-            BridgeModSystem.Instance?.WebSocketServer?.Broadcast(MessageSerializer.BuildMessage(type, payload));
-        }
-        catch
-        {
-        }
     }
 
     private void DisposeCancellation(string requestId, bool cancel)
@@ -313,25 +251,53 @@ public sealed class LlmBridgeSystem : ModSystem
 
     private void CompleteHandle(LlmRequestHandle handle, JsonNode? result)
     {
+        bool notify = false;
         lock (_sync)
+        {
+            bool wasDone = handle.IsDone;
             handle.Complete(result);
+            notify = !wasDone && handle.IsDone;
+        }
+        if (notify)
+            global::TerraClaw.TerraClaw.Api?.NotifyLlmRequestFinished(handle);
     }
 
     private void FailHandle(LlmRequestHandle handle, string error)
     {
+        bool notify = false;
         lock (_sync)
+        {
+            bool wasDone = handle.IsDone;
             handle.Fail(error);
+            notify = !wasDone && handle.IsDone;
+        }
+        if (notify)
+            global::TerraClaw.TerraClaw.Api?.NotifyLlmRequestFinished(handle);
     }
 
     private void CancelHandle(LlmRequestHandle handle)
     {
+        bool notify = false;
         lock (_sync)
+        {
+            bool wasDone = handle.IsDone;
             handle.MarkCancelled();
+            notify = !wasDone && handle.IsDone;
+        }
+        if (notify)
+            global::TerraClaw.TerraClaw.Api?.NotifyLlmRequestFinished(handle);
     }
 
     private void TimeoutHandle(LlmRequestHandle handle)
     {
+        bool notify = false;
         lock (_sync)
+        {
+            bool wasDone = handle.IsDone;
             handle.Timeout();
+            notify = !wasDone && handle.IsDone;
+        }
+        if (notify)
+            global::TerraClaw.TerraClaw.Api?.NotifyLlmRequestFinished(handle);
     }
 }

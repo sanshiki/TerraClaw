@@ -25,10 +25,12 @@ Requests are non-blocking. Keep the returned `LlmRequestHandle` and poll it from
 Use this to handle LLM latency without blocking Terraria's 60 FPS loop.
 
 ```csharp
-if (handle.TryGetResult(out JsonNode? output)) {
-    // parse and apply output
+if (handle.TryGetResult(out LlmResult result) && result.Is("talk")) {
+    string text = result.String("text");
 }
 ```
+
+Use `TryGetResult(out JsonNode? output)` when raw JSON parsing is needed.
 
 Only one pending request is allowed per `agentId`; `LlmBridgeSystem.Request` returns the existing pending handle when one already exists.
 
@@ -103,9 +105,10 @@ var output = LlmOutput.OneOf(
 
 `LlmOutput` generates:
 
-- full JSON Schema for debugging/future validation,
+- full JSON Schema for debugging,
 - compact output legend,
-- flat output contract for the prompt.
+- flat output contract for the prompt,
+- runtime validation for TerraClaw output semantics.
 
 ## Adding an Agent
 
@@ -215,15 +218,8 @@ switch (type) {
 
 ## Validation
 
-Use `dotnet build` as a quick local C# compile check when useful. It is not final validation for this tModLoader project; still Build + Reload in tModLoader and fix any compiler or runtime errors from there.
+`LlmOutput` validates completed model output before `LlmRequestHandle` is marked completed. Invalid output fails the request and appears in `/terraclawdash` with the raw output and validation error.
 
-Python-only changes can be checked with:
+Final C# validation should still be Build + Reload inside tModLoader plus in-game testing.
 
-```powershell
-cd runtime
-pytest
-```
 
-## Deprecated Path
-
-The older Python-driven `AgentLoop`, `agent.register`, and `agent.action` queue path is deprecated for new agents. New C# agents should implement behavior directly in tModLoader hooks and call `LlmBridgeSystem.Request`.

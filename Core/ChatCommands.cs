@@ -1,7 +1,6 @@
-using System;
 using Terraria;
 using Terraria.ModLoader;
-using TerraClaw.Network;
+using TerraClaw.Agents.TerraClaw;
 
 namespace TerraClaw.Core;
 
@@ -21,7 +20,7 @@ public class AgentChatCommand : ModCommand
 
     public override string Description => "Send an instruction to the TerraClaw NPC agent";
 
-    /// <summary>Broadcasts player text to the runtime and directly delivers it to in-game instruction receivers.</summary>
+    /// <summary>Directly delivers player text to in-game instruction receivers.</summary>
     public override void Action(CommandCaller caller, string input, string[] args)
     {
         if (args.Length == 0)
@@ -31,16 +30,7 @@ public class AgentChatCommand : ModCommand
         }
 
         string instruction = string.Join(" ", args);
-
-        var json = MessageSerializer.BuildMessage("player.chat", new
-        {
-            player = caller.Player?.name ?? "Unknown",
-            text = instruction,
-            timestamp_ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-        });
-
-        BridgeModSystem.Instance.WebSocketServer.Broadcast(json);
-        int delivered = BridgeModSystem.Instance.DeliverPlayerInstruction(
+        int delivered = ExampleTerraClawAgent.DeliverPlayerInstruction(
             caller.Player?.name ?? "Unknown",
             instruction);
         Main.NewText($"[TerraClaw] Instruction sent to {delivered} agent(s): {instruction}", 150, 200, 255);

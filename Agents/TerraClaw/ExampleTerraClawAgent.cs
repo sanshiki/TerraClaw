@@ -4,8 +4,6 @@ using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using Terraria;
 using Terraria.DataStructures;
 using Terraria.GameContent.UI;
@@ -314,21 +312,16 @@ public sealed class ExampleTerraClawAgent : ModNPC
         if (_llm.IsPending)
             return;
 
-        if (_llm.TryGetResult(out JsonNode? output) && output is JsonObject obj)
+        if (_llm.TryGetResult(out LlmResult result))
         {
-            ApplyLlmOutput(obj);
-            EnqueueTurnSummary(obj);
+            ApplyLlmOutput(result);
+            EnqueueTurnSummary(result);
         }
         else if (_llm.IsDone)
-            EnqueueTurnSummary(new JsonObject
-            {
-                ["type"] = "failed",
-                ["summary"] = $"request failed: {_llm.Error ?? _llm.Status.ToString()}",
-            });
+            EnqueueTurnSummary($"request failed: {_llm.Error ?? _llm.Status.ToString()}");
 
         _llm = null;
     }
-
     public override void OnSpawn(IEntitySource source)
     {
         _target = NPC.Center;
@@ -375,15 +368,15 @@ public sealed class ExampleTerraClawAgent : ModNPC
         Lighting.AddLight(NPC.Center, 0.3f, 0.3f, 1f);
     }
 
-    private void ApplyLlmOutput(JsonObject obj)
+    private void ApplyLlmOutput(LlmResult result)
     {
-        string type = ReadString(obj, "type");
-        bool callback = ReadBool(obj, "callback");
+        string type = result.Type;
+        bool callback = result.Bool("callback");
 
         switch (type)
         {
             case "say":
-                string text = ReadString(obj, "text");
+                string text = result.String("text");
                 Say(text);
                 ShowActionEmote(EmoteID.EmoteNote);
                 FinishImmediateAction("say", string.IsNullOrWhiteSpace(text) ? "empty" : text, callback);
@@ -391,25 +384,25 @@ public sealed class ExampleTerraClawAgent : ModNPC
 
             case "moveto":
                 StartMove(
-                    ReadInt(obj, "tile_x", (int)(NPC.Center.X / 16f)),
-                    ReadInt(obj, "tile_y", (int)(NPC.Center.Y / 16f)),
+                    result.Int("tile_x", (int)(NPC.Center.X / 16f)),
+                    result.Int("tile_y", (int)(NPC.Center.Y / 16f)),
                     callback);
                 break;
 
             case "breaktiles":
                 StartBreakTiles(
-                    ReadInt(obj, "tile_x", (int)(NPC.Center.X / 16f)),
-                    ReadInt(obj, "tile_y", (int)(NPC.Center.Y / 16f)),
-                    ReadInt(obj, "radius", 1),
+                    result.Int("tile_x", (int)(NPC.Center.X / 16f)),
+                    result.Int("tile_y", (int)(NPC.Center.Y / 16f)),
+                    result.Int("radius", 1),
                     callback);
                 break;
 
             case "scanarea":
-                StartScanArea(ReadInt(obj, "radius", 48), callback);
+                StartScanArea(result.Int("radius", 48), callback);
                 break;
 
             case "plan":
-                UpdatePlan(ReadString(obj, "todo"), callback);
+                UpdatePlan(result.String("todo"), callback);
                 break;
 
             default:
@@ -417,7 +410,6 @@ public sealed class ExampleTerraClawAgent : ModNPC
                 break;
         }
     }
-
     private void StartMove(int tileX, int tileY, bool callback)
     {
         var target = new Vector2(tileX * 16f + 8f, tileY * 16f + 8f);
@@ -690,17 +682,19 @@ public sealed class ExampleTerraClawAgent : ModNPC
         FindClaw(side: 1)?.Recall();
     }
 
-    private void EnqueueTurnSummary(JsonObject obj)
+    private void EnqueueTurnSummary(LlmResult result)
     {
         // STM stores one compact model-authored note per normal request. Raw observation
         // remains request-local and is never copied into memory.
-        string summary = ReadString(obj, "summary");
+        string summary = result.String("summary");
         if (string.IsNullOrWhiteSpace(summary))
-        {
-            string type = ReadString(obj, "type");
-            summary = $"{type}: {_lastActionSummary}";
-        }
+            summary = $"{result.Type}: {_lastActionSummary}";
 
+        EnqueueTurnSummary(summary);
+    }
+
+    private void EnqueueTurnSummary(string summary)
+    {
         if (string.IsNullOrWhiteSpace(summary))
             return;
 
@@ -708,7 +702,6 @@ public sealed class ExampleTerraClawAgent : ModNPC
         while (_shortTermMemory.Count > ShortTermMemoryLimit)
             _shortTermMemory.Dequeue();
     }
-
     private void Say(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -726,9 +719,9 @@ public sealed class ExampleTerraClawAgent : ModNPC
         if (_compactLlm.IsPending)
             return;
 
-        if (_compactLlm.TryGetResult(out JsonNode? output) && output is JsonObject obj)
+        if (_compactLlm.TryGetResult(out LlmResult result))
         {
-            string updated = ReadString(obj, "updated_ltm");
+            string updated = result.String("updated_ltm");
             if (!string.IsNullOrWhiteSpace(updated))
                 _longTermMemory = updated.Trim();
         }
@@ -736,7 +729,6 @@ public sealed class ExampleTerraClawAgent : ModNPC
         _shortTermMemory.Clear();
         _compactLlm = null;
     }
-
     private bool IsRecentScanAvailable()
     {
         return Main.GameUpdateCount - _lastScanTick <= ScanMemoryTicks;
@@ -748,59 +740,6 @@ public sealed class ExampleTerraClawAgent : ModNPC
             .Split(new[] { '\n', ';', '|' }, StringSplitOptions.RemoveEmptyEntries)
             .Select(item => item.Trim())
             .Where(item => item.Length > 0);
-    }
-
-    private static string ReadString(JsonObject obj, string key)
-    {
-        JsonNode? node = obj[key];
-        if (node == null)
-            return "";
-        try
-        {
-            return node.GetValue<string>() ?? "";
-        }
-        catch
-        {
-            return node.ToJsonString();
-        }
-    }
-
-    private static bool ReadBool(JsonObject obj, string key)
-    {
-        JsonNode? node = obj[key];
-        if (node == null)
-            return false;
-        try
-        {
-            if (node.GetValueKind() == JsonValueKind.True || node.GetValueKind() == JsonValueKind.False)
-                return node.GetValue<bool>();
-            if (node.GetValueKind() == JsonValueKind.Number)
-                return node.GetValue<int>() != 0;
-            if (node.GetValueKind() == JsonValueKind.String)
-                return bool.TryParse(node.GetValue<string>(), out bool value) && value;
-            return false;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static int ReadInt(JsonObject obj, string key, int fallback)
-    {
-        JsonNode? node = obj[key];
-        if (node == null)
-            return fallback;
-        try
-        {
-            return node.GetValueKind() == JsonValueKind.Number
-                ? (int)Math.Round(node.GetValue<double>())
-                : fallback;
-        }
-        catch
-        {
-            return fallback;
-        }
     }
 
     private enum ActionKind
@@ -827,3 +766,4 @@ public sealed class ExampleTerraClawAgent : ModNPC
         public int InflightClawBreaks { get; set; }
     }
 }
+

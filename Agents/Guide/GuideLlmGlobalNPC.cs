@@ -1,6 +1,5 @@
 using Microsoft.Xna.Framework;
 using System.Collections.Generic;
-using System.Text.Json.Nodes;
 using Terraria;
 using Terraria.ID;
 using Terraria.ModLoader;
@@ -177,7 +176,7 @@ public sealed class GuideLlmGlobalNPC : GlobalNPC
     private static LlmOutput BuildOutputContract()
     {
         // The parser below accepts both flat typed objects and aggregate forms returned for allOf/anyOf contracts.
-        return LlmOutput.AllOf(
+        return LlmOutput.AnyOf(
             LlmOutput.Object("combat_text", "Show immediate overhead text above the Guide.")
                 .String("text", required: true, maxLength: 80, description: "short overhead text"),
             LlmOutput.Object("cached_text", "Save text for right-click Guide chat.")
@@ -189,61 +188,28 @@ public sealed class GuideLlmGlobalNPC : GlobalNPC
 
     private static void PollResult(NPC npc, GuideAgentState state)
     {
-        if (state.Pending == null || !state.Pending.TryGetResult(out JsonNode? output))
+        if (state.Pending == null || !state.Pending.TryGetResult(out LlmResult result))
             return;
 
-        ApplyOutput(npc, state, output);
+        ApplyOutput(npc, state, result);
         state.Pending = null;
     }
 
-    private static void ApplyOutput(NPC npc, GuideAgentState state, JsonNode? output)
+    private static void ApplyOutput(NPC npc, GuideAgentState state, LlmResult result)
     {
-        // Composite output contracts may come back as arrays or wrapped in an "outputs" array.
-        if (output is JsonArray array)
+        if (result.TryGetBranch("combat_text", out var combatText))
+            ShowCombatText(npc, combatText.String("text"));
+
+        if (result.TryGetBranch("cached_text", out var cachedText))
+            SetCachedText(state, cachedText.String("text"));
+
+        if (result.TryGetBranch("set_emotion", out var emotionOutput))
+            state.Emotion = Truncate(emotionOutput.String("emotion", emotionOutput.String("text", state.Emotion)), 40);
+        else
         {
-            foreach (var item in array)
-                ApplyOutput(npc, state, item);
-            return;
-        }
-
-        if (output is not JsonObject obj)
-            return;
-
-        if (obj["outputs"] is JsonArray outputs)
-        {
-            foreach (var item in outputs)
-                ApplyOutput(npc, state, item);
-            return;
-        }
-
-        if (obj["combat_text"] is JsonObject combatObj)
-            ShowCombatText(npc, combatObj["text"]?.GetValue<string>() ?? "");
-        else if (obj["combat_text"] is JsonValue combatValue)
-            ShowCombatText(npc, combatValue.GetValue<string>());
-
-        if (obj["cached_text"] is JsonObject cachedObj)
-            SetCachedText(state, cachedObj["text"]?.GetValue<string>() ?? "");
-        else if (obj["cached_text"] is JsonValue cachedValue)
-            SetCachedText(state, cachedValue.GetValue<string>());
-
-        if (obj["set_emotion"] is JsonObject emotionObj)
-            state.Emotion = Truncate(emotionObj["emotion"]?.GetValue<string>() ?? state.Emotion, 40);
-        else if (obj["emotion"] is JsonValue emotionValue)
-            state.Emotion = Truncate(emotionValue.GetValue<string>(), 40);
-
-        string type = obj["type"]?.GetValue<string>() ?? "";
-        // Also support the simple typed-object shape: {"type":"combat_text","text":"..."}.
-        switch (type)
-        {
-            case "combat_text":
-                ShowCombatText(npc, obj["text"]?.GetValue<string>() ?? "");
-                break;
-            case "cached_text":
-                SetCachedText(state, obj["text"]?.GetValue<string>() ?? "");
-                break;
-            case "set_emotion":
-                state.Emotion = Truncate(obj["emotion"]?.GetValue<string>() ?? state.Emotion, 40);
-                break;
+            string emotion = result.String("emotion");
+            if (!string.IsNullOrWhiteSpace(emotion))
+                state.Emotion = Truncate(emotion, 40);
         }
     }
 
@@ -298,3 +264,7 @@ public sealed class GuideLlmGlobalNPC : GlobalNPC
         return value.Length <= maxLength ? value : value[..maxLength];
     }
 }
+
+
+
+

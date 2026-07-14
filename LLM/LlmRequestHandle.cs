@@ -66,6 +66,13 @@ public sealed class LlmRequestHandle
         return Status == LlmRequestStatus.Completed && output != null;
     }
 
+    /// <summary>Attempts to read the completed output through a convenience reader.</summary>
+    public bool TryGetResult(out LlmResult result)
+    {
+        result = new LlmResult(_output);
+        return Status == LlmRequestStatus.Completed && _output != null;
+    }
+
     /// <summary>Attempts to deserialize the raw JSON output into a typed model.</summary>
     public bool TryGetResult<T>(out T? result)
     {
@@ -116,3 +123,6 @@ public sealed class LlmRequestHandle
         Status = LlmRequestStatus.TimedOut;
     }
 }
+
+
+

@@ -1,0 +1,4 @@
+interface:
+  display_name: "tModLoader Framework API"
+  short_description: "Design stable, extensible tModLoader framework APIs"
+  default_prompt: "Use $tmodloader-framework-api to design or review this tModLoader feature as a stable public framework API."

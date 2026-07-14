@@ -10,13 +10,5 @@
     <PackageReference Include="OpenAI" Version="2.2.0" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Compile Remove="runtime\**" />
-    <Compile Remove="protocol\**" />
-    <Compile Remove="docker\**" />
-    <Compile Remove="tools\**" />
-    <Compile Remove="config\**" />
-  </ItemGroup>
-
   <Import Project="..\tModLoader.targets" />
 </Project>
