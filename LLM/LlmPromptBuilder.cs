@@ -113,6 +113,7 @@ internal static class LlmPromptBuilder
     private static string CompactFlatContract(JsonObject flat)
     {
         var parts = new List<string> { $"mode={flat["mode"]?.GetValue<string>() ?? "object"}" };
+        parts.Add("return=top-level type field; no type-name wrapper");
         var choices = new List<string>();
         if (flat["choices"] is JsonArray choicesArray)
         {
@@ -180,6 +181,9 @@ internal static class LlmPromptBuilder
 
         if (typeNames.Count > 0)
             lines.Add($"Required selector: type in [{string.Join(",", typeNames)}]");
+        lines.Add(mode == "any"
+            ? "Every returned object must include its own top-level type field."
+            : "The returned object must include top-level type; do not wrap fields under the type name.");
         lines.Add("Field suffix: !=required, ?=optional.");
         return string.Join("\n", lines);
     }

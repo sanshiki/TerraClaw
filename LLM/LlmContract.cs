@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -325,7 +326,13 @@ public sealed class LlmOutput
     /// <summary>Validates raw LLM output against this contract's TerraClaw output semantics.</summary>
     public LlmOutputValidationResult Validate(JsonNode? output)
     {
-        return LlmOutputValidator.Validate(output, _flat);
+        return LlmOutputValidator.Validate(Normalize(output), _flat);
+    }
+
+    /// <summary>Returns a canonical typed-object form for common valid-but-sloppy LLM output shapes.</summary>
+    internal JsonNode? Normalize(JsonNode? output)
+    {
+        return LlmOutputNormalizer.Normalize(output, _flat);
     }
 
     private static LlmOutput Composite(string key, string description, LlmOutput[] outputs)
@@ -480,6 +487,433 @@ public sealed class LlmObjectBuilder
             item["description"] = description;
         _fieldLegend.Add(item);
         return this;
+    }
+}
+
+internal static class LlmOutputNormalizer
+{
+    private static readonly string[] SelectorKeys = ["type", "action", "tool", "branch", "output_type"];
+
+    public static JsonNode? Normalize(JsonNode? output, JsonObject flat)
+    {
+        if (output == null)
+            return null;
+
+        string mode = flat["mode"]?.GetValue<string>() ?? "object";
+        JsonArray choices = flat["choices"] as JsonArray ?? new JsonArray();
+        return mode switch
+        {
+            "any" => NormalizeAny(output, choices),
+            "all" => NormalizeAll(output, choices),
+            _ => NormalizeSingle(output, choices) ?? output,
+        };
+    }
+
+    private static JsonNode NormalizeAny(JsonNode output, JsonArray choices)
+    {
+        if (output is JsonArray array)
+            return NormalizeArray(array, choices);
+
+        if (output is JsonObject obj && obj["outputs"] is JsonArray outputs)
+            return WithNormalizedOutputs(obj, outputs, choices);
+
+        return NormalizeSingle(output, choices) ?? output;
+    }
+
+    private static JsonNode NormalizeAll(JsonNode output, JsonArray choices)
+    {
+        if (output is JsonArray array)
+            return NormalizeArray(array, choices);
+
+        if (output is JsonObject obj && obj["outputs"] is JsonArray outputs)
+            return WithNormalizedOutputs(obj, outputs, choices);
+
+        return output;
+    }
+
+    private static JsonArray NormalizeArray(JsonArray array, JsonArray choices)
+    {
+        var result = new JsonArray();
+        foreach (JsonNode? item in array)
+        {
+            JsonNode? normalized = item == null ? null : NormalizeSingle(item, choices) ?? item;
+            result.Add(normalized?.DeepClone());
+        }
+        return result;
+    }
+
+    private static JsonObject WithNormalizedOutputs(JsonObject obj, JsonArray outputs, JsonArray choices)
+    {
+        var result = new JsonObject();
+        foreach (var property in obj)
+            result[property.Key] = property.Key == "outputs" ? NormalizeArray(outputs, choices) : property.Value?.DeepClone();
+        return result;
+    }
+
+    private static JsonNode? NormalizeSingle(JsonNode output, JsonArray choices)
+    {
+        if (output is not JsonObject obj)
+            return null;
+
+        if (TryGetSelector(obj, out string? selector))
+        {
+            JsonObject? selectedChoice = FindChoice(choices, selector);
+            if (selectedChoice != null)
+                return BuildTypedObject(selectedChoice, branchObject: obj, branchValue: null, topLevel: null);
+            return null;
+        }
+
+        if (TryFindSingleKeyedChoice(obj, choices, out JsonObject keyedChoice, out JsonNode? branchNode))
+        {
+            JsonObject? branchObject = ToBranchObject(branchNode);
+            JsonNode? branchValue = branchObject == null ? ToScalarBranchValue(branchNode, keyedChoice) : null;
+            return BuildTypedObject(keyedChoice, branchObject, branchValue, obj);
+        }
+
+        JsonObject? onlyChoice = SingleChoice(choices);
+        if (onlyChoice != null)
+            return BuildTypedObject(onlyChoice, branchObject: obj, branchValue: null, topLevel: null);
+
+        return null;
+    }
+
+    private static JsonObject BuildTypedObject(
+        JsonObject choice,
+        JsonObject? branchObject,
+        JsonNode? branchValue,
+        JsonObject? topLevel)
+    {
+        string type = ChoiceType(choice);
+        var result = new JsonObject { ["type"] = type };
+        var consumedBranchKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (JsonObject field in Fields(choice))
+        {
+            string name = FieldName(field);
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            JsonNode? value = FindFieldValue(branchObject, name, consumedBranchKeys)
+                ?? FindAliasValue(branchObject, field, consumedBranchKeys)
+                ?? FindFieldValue(topLevel, name, consumedKeys: null)
+                ?? FindAliasValue(topLevel, field, consumedKeys: null);
+
+            if (value == null && branchValue != null && IsFirstRequiredField(choice, field))
+                value = branchValue;
+
+            if (value != null)
+                result[name] = CoerceFieldValue(value, field).DeepClone();
+        }
+
+        FillSingleUnknownStringField(result, branchObject, consumedBranchKeys, choice);
+        return result;
+    }
+
+    private static bool TryGetSelector(JsonObject obj, out string? selector)
+    {
+        foreach (string key in SelectorKeys)
+        {
+            if (TryGetProperty(obj, key, out JsonNode? value)
+                && value is JsonValue jsonValue
+                && jsonValue.TryGetValue<string>(out string? text)
+                && !string.IsNullOrWhiteSpace(text))
+            {
+                selector = text;
+                return true;
+            }
+        }
+
+        selector = null;
+        return false;
+    }
+
+    private static bool TryFindSingleKeyedChoice(
+        JsonObject obj,
+        JsonArray choices,
+        out JsonObject choice,
+        out JsonNode? branchNode)
+    {
+        choice = null!;
+        branchNode = null;
+        int matches = 0;
+
+        foreach (JsonObject candidate in Choices(choices))
+        {
+            string type = ChoiceType(candidate);
+            if (string.IsNullOrWhiteSpace(type) || !TryGetProperty(obj, type, out JsonNode? value))
+                continue;
+
+            choice = candidate;
+            branchNode = value;
+            matches++;
+        }
+
+        return matches == 1;
+    }
+
+    private static JsonObject? ToBranchObject(JsonNode? branchNode)
+    {
+        if (branchNode is JsonObject branchObject)
+            return branchObject;
+
+        if (branchNode is JsonArray array)
+        {
+            foreach (JsonNode? item in array)
+            {
+                if (item is JsonObject itemObject)
+                    return itemObject;
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonNode? ToScalarBranchValue(JsonNode? branchNode, JsonObject choice)
+    {
+        if (branchNode == null || branchNode is JsonObject)
+            return null;
+
+        if (branchNode is JsonArray array)
+        {
+            JsonObject? firstRequired = FirstRequiredField(choice);
+            if (firstRequired == null || FieldType(firstRequired) != "string")
+                return null;
+
+            var parts = new List<string>();
+            foreach (JsonNode? item in array)
+            {
+                if (item is not JsonValue value || !value.TryGetValue<string>(out string? text))
+                    return null;
+                if (!string.IsNullOrWhiteSpace(text))
+                    parts.Add(text);
+            }
+
+            return parts.Count == 0 ? null : JsonValue.Create(string.Join("\n", parts));
+        }
+
+        return branchNode;
+    }
+
+    private static JsonNode? FindFieldValue(JsonObject? source, string name, HashSet<string>? consumedKeys)
+    {
+        if (source == null)
+            return null;
+
+        if (!TryGetProperty(source, name, out JsonNode? value, out string? actualKey))
+            return null;
+
+        consumedKeys?.Add(actualKey);
+        return value;
+    }
+
+    private static JsonNode? FindAliasValue(JsonObject? source, JsonObject field, HashSet<string>? consumedKeys)
+    {
+        if (source == null)
+            return null;
+
+        foreach (string alias in FieldAliases(FieldName(field)))
+        {
+            if (TryGetProperty(source, alias, out JsonNode? value, out string? actualKey))
+            {
+                consumedKeys?.Add(actualKey);
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static void FillSingleUnknownStringField(
+        JsonObject result,
+        JsonObject? branchObject,
+        HashSet<string> consumedBranchKeys,
+        JsonObject choice)
+    {
+        if (branchObject == null)
+            return;
+
+        JsonObject? missingRequiredString = Fields(choice)
+            .FirstOrDefault(field =>
+                field["required"]?.GetValue<bool>() == true
+                && FieldType(field) == "string"
+                && !result.ContainsKey(FieldName(field)));
+        if (missingRequiredString == null)
+            return;
+
+        var candidates = new List<JsonNode>();
+        foreach (var property in branchObject)
+        {
+            if (consumedBranchKeys.Contains(property.Key) || IsKnownFieldOrSelector(property.Key, choice))
+                continue;
+            if (property.Value is JsonValue value && value.TryGetValue<string>(out _))
+                candidates.Add(value);
+        }
+
+        if (candidates.Count == 1)
+            result[FieldName(missingRequiredString)] = CoerceFieldValue(candidates[0], missingRequiredString).DeepClone();
+    }
+
+    private static JsonNode CoerceFieldValue(JsonNode value, JsonObject field)
+    {
+        if (value is not JsonValue jsonValue)
+            return value;
+
+        return FieldType(field) switch
+        {
+            "string" => CoerceString(jsonValue, field) ?? value,
+            "boolean" => CoerceBoolean(jsonValue) ?? value,
+            "number" => CoerceNumber(jsonValue) ?? value,
+            _ => value,
+        };
+    }
+
+    private static JsonNode? CoerceString(JsonValue value, JsonObject field)
+    {
+        if (field["max"] is not JsonNode maxNode || !value.TryGetValue<string>(out string? text))
+            return null;
+
+        int max = maxNode.GetValue<int>();
+        return text.Length > max ? JsonValue.Create(text[..max]) : null;
+    }
+
+    private static JsonNode? CoerceBoolean(JsonValue value)
+    {
+        if (value.TryGetValue<bool>(out _))
+            return null;
+        if (value.TryGetValue<int>(out int intValue))
+            return JsonValue.Create(intValue != 0);
+        if (value.TryGetValue<string>(out string? text))
+        {
+            text = text.Trim();
+            if (bool.TryParse(text, out bool boolValue))
+                return JsonValue.Create(boolValue);
+            if (string.Equals(text, "1", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(text, "yes", StringComparison.OrdinalIgnoreCase))
+                return JsonValue.Create(true);
+            if (string.Equals(text, "0", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(text, "no", StringComparison.OrdinalIgnoreCase))
+                return JsonValue.Create(false);
+        }
+
+        return null;
+    }
+
+    private static JsonNode? CoerceNumber(JsonValue value)
+    {
+        if (value.TryGetValue<double>(out _) || value.TryGetValue<int>(out _))
+            return null;
+        if (value.TryGetValue<string>(out string? text)
+            && double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double number))
+            return JsonValue.Create(number);
+
+        return null;
+    }
+
+    private static bool IsFirstRequiredField(JsonObject choice, JsonObject field)
+    {
+        JsonObject? firstRequired = FirstRequiredField(choice);
+        return firstRequired != null
+            && string.Equals(FieldName(firstRequired), FieldName(field), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static JsonObject? FirstRequiredField(JsonObject choice)
+    {
+        return Fields(choice).FirstOrDefault(field => field["required"]?.GetValue<bool>() == true);
+    }
+
+    private static bool IsKnownFieldOrSelector(string key, JsonObject choice)
+    {
+        if (SelectorKeys.Any(selector => string.Equals(selector, key, StringComparison.OrdinalIgnoreCase)))
+            return true;
+        if (string.Equals(ChoiceType(choice), key, StringComparison.OrdinalIgnoreCase))
+            return true;
+        foreach (JsonObject field in Fields(choice))
+        {
+            if (string.Equals(FieldName(field), key, StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (FieldAliases(FieldName(field)).Any(alias => string.Equals(alias, key, StringComparison.OrdinalIgnoreCase)))
+                return true;
+        }
+        return false;
+    }
+
+    private static string[] FieldAliases(string name)
+    {
+        return name.ToLowerInvariant() switch
+        {
+            "text" => ["message", "content", "line", "txt", "lext"],
+            "tile_x" => ["x"],
+            "tile_y" => ["y"],
+            "callback" => ["continue", "should_continue"],
+            "summary" => ["reason", "note", "notes"],
+            _ => [],
+        };
+    }
+
+    private static bool TryGetProperty(JsonObject source, string name, out JsonNode? value)
+    {
+        return TryGetProperty(source, name, out value, out _);
+    }
+
+    private static bool TryGetProperty(JsonObject source, string name, out JsonNode? value, out string actualKey)
+    {
+        foreach (var property in source)
+        {
+            if (string.Equals(property.Key, name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                actualKey = property.Key;
+                return true;
+            }
+        }
+
+        value = null;
+        actualKey = "";
+        return false;
+    }
+
+    private static JsonObject? SingleChoice(JsonArray choices)
+    {
+        JsonObject? result = null;
+        foreach (JsonObject choice in Choices(choices))
+        {
+            if (result != null)
+                return null;
+            result = choice;
+        }
+        return result;
+    }
+
+    private static JsonObject? FindChoice(JsonArray choices, string type)
+    {
+        return Choices(choices).FirstOrDefault(choice => string.Equals(ChoiceType(choice), type, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string ChoiceType(JsonObject choice) => choice["type"]?.GetValue<string>() ?? "";
+
+    private static string FieldName(JsonObject field) => field["name"]?.GetValue<string>() ?? "";
+
+    private static string FieldType(JsonObject field) => field["type"]?.GetValue<string>() ?? "any";
+
+    private static IEnumerable<JsonObject> Choices(JsonArray choices)
+    {
+        foreach (JsonNode? choice in choices)
+        {
+            if (choice is JsonObject obj)
+                yield return obj;
+        }
+    }
+
+    private static IEnumerable<JsonObject> Fields(JsonObject choice)
+    {
+        if (choice["fields"] is not JsonArray fields)
+            yield break;
+
+        foreach (JsonNode? field in fields)
+        {
+            if (field is JsonObject obj)
+                yield return obj;
+        }
     }
 }
 

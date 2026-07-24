@@ -5,6 +5,7 @@ using OpenAI.Chat;
 using System;
 using System.ClientModel;
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
@@ -45,7 +46,7 @@ internal sealed class LlmClient
             throw new InvalidOperationException("OpenAI response did not contain text content.");
 
         string text = StripCodeFence(completion.Content[0].Text.Trim());
-        JsonNode? parsed = JsonNode.Parse(text);
+        JsonNode? parsed = ParseJsonOutput(text);
         if (parsed is not JsonObject && parsed is not JsonArray)
             throw new InvalidOperationException("LLM output must be a JSON object or array.");
         return parsed;
@@ -78,5 +79,85 @@ internal sealed class LlmClient
         if (end > start && lines[end - 1].StartsWith("```", StringComparison.Ordinal))
             end--;
         return string.Join("\n", lines[start..end]).Trim();
+    }
+
+    private static JsonNode? ParseJsonOutput(string text)
+    {
+        try
+        {
+            return JsonNode.Parse(text);
+        }
+        catch (JsonException ex)
+        {
+            foreach (string extracted in ExtractJsonValues(text))
+            {
+                try
+                {
+                    return JsonNode.Parse(extracted);
+                }
+                catch (JsonException)
+                {
+                }
+            }
+
+            throw new InvalidOperationException("LLM output was not valid JSON.", ex);
+        }
+    }
+
+    private static IEnumerable<string> ExtractJsonValues(string text)
+    {
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (text[i] != '{' && text[i] != '[')
+                continue;
+
+            string? value = ExtractJsonValueAt(text, i);
+            if (!string.IsNullOrWhiteSpace(value))
+                yield return value;
+        }
+    }
+
+    private static string? ExtractJsonValueAt(string text, int start)
+    {
+        int depth = 0;
+        bool inString = false;
+        bool escaped = false;
+        for (int i = start; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (inString)
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+                if (c == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+                if (c == '"')
+                    inString = false;
+                continue;
+            }
+
+            if (c == '"')
+            {
+                inString = true;
+                continue;
+            }
+
+            if (c == '{' || c == '[')
+                depth++;
+            else if (c == '}' || c == ']')
+            {
+                depth--;
+                if (depth == 0)
+                    return text[start..(i + 1)].Trim();
+            }
+        }
+
+        return null;
     }
 }

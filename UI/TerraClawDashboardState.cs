@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Xna.Framework;
 using Terraria;
+using Terraria.GameContent;
 using Terraria.GameContent.UI.Elements;
 using Terraria.UI;
 
@@ -12,6 +13,9 @@ namespace TerraClaw.UI;
 
 internal sealed class TerraClawDashboardState : UIState
 {
+    private const float DetailTextScale = 0.72f;
+    private const float DetailBottomPadding = 28f;
+
     private readonly Color _panelColor = new(28, 32, 45, 235);
     private readonly Color _innerColor = new(18, 21, 30, 240);
     private readonly Color _borderColor = new(75, 85, 115);
@@ -194,12 +198,12 @@ internal sealed class TerraClawDashboardState : UIState
         _summary.SetText($"{entry.Status}  |  agent {ShortId(entry.AgentId)}  |  request {ShortId(entry.RequestId)}  |  {duration}");
 
         _detailList.Add(TextLine("Instruction", new Color(160, 190, 255)));
-        _detailList.Add(TextBlock(string.IsNullOrWhiteSpace(entry.Instruction) ? "(none)" : entry.Instruction));
+        _detailList.Add(TextBlock(string.IsNullOrWhiteSpace(entry.Instruction) ? "(none)" : entry.Instruction, DetailTextWidth()));
 
         if (!string.IsNullOrWhiteSpace(entry.Error))
         {
             _detailList.Add(TextLine("Error", new Color(247, 118, 142)));
-            _detailList.Add(TextBlock(entry.Error));
+            _detailList.Add(TextBlock(entry.Error, DetailTextWidth()));
         }
 
         string body = _tab switch
@@ -212,7 +216,8 @@ internal sealed class TerraClawDashboardState : UIState
         };
 
         _detailList.Add(TextLine(_tab.ToString(), new Color(160, 190, 255)));
-        _detailList.Add(TextBlock(string.IsNullOrWhiteSpace(body) ? "(empty)" : body));
+        _detailList.Add(TextBlock(string.IsNullOrWhiteSpace(body) ? "(empty)" : body, DetailTextWidth()));
+        _detailList.Add(Spacer(DetailBottomPadding));
     }
 
     private void AddTabButtons(UIElement parent)
@@ -266,16 +271,25 @@ internal sealed class TerraClawDashboardState : UIState
         return line;
     }
 
-    private static UIText TextBlock(string text)
+    private static UIText TextBlock(string text, float maxWidth)
     {
-        string wrapped = Wrap(text, 72);
+        string wrapped = Wrap(text, maxWidth, DetailTextScale);
         int lineCount = wrapped.Count(ch => ch == '\n') + 1;
-        var block = new UIText(wrapped, 0.72f);
+        var block = new UIText(wrapped, DetailTextScale);
         block.TextOriginX = 0f;
         block.TextColor = new Color(205, 213, 245);
         block.Width.Set(0f, 1f);
-        block.Height.Set(Math.Max(24f, lineCount * 17f + 8f), 0f);
+        float lineHeight = FontAssets.MouseText.Value.MeasureString("A").Y * DetailTextScale;
+        block.Height.Set(Math.Max(24f, lineCount * Math.Max(18f, lineHeight) + 10f), 0f);
         return block;
+    }
+
+    private static UIElement Spacer(float height)
+    {
+        var spacer = new UIElement();
+        spacer.Width.Set(0f, 1f);
+        spacer.Height.Set(height, 0f);
+        return spacer;
     }
 
     private static string RowTitle(LlmDebugEntry entry)
@@ -305,20 +319,47 @@ internal sealed class TerraClawDashboardState : UIState
         return value.Length <= 8 ? value : value[..8];
     }
 
-    private static string Wrap(string text, int width)
+    private float DetailTextWidth()
+    {
+        float width = _detailList.GetInnerDimensions().Width;
+        if (width <= 0f)
+            width = Main.screenWidth * 0.72f - 292f - 64f;
+        return Math.Max(120f, width - 12f);
+    }
+
+    private static string Wrap(string text, float maxWidth, float scale)
     {
         var lines = new List<string>();
         foreach (string rawLine in text.ReplaceLineEndings("\n").Split('\n'))
         {
-            string line = rawLine;
-            while (line.Length > width)
+            if (rawLine.Length == 0)
             {
-                lines.Add(line[..width]);
-                line = line[width..];
+                lines.Add("");
+                continue;
+            }
+
+            string line = "";
+            foreach (char c in rawLine)
+            {
+                string candidate = line + c;
+                if (line.Length > 0 && TextWidth(candidate, scale) > maxWidth)
+                {
+                    lines.Add(line.TrimEnd());
+                    line = c.ToString();
+                }
+                else
+                {
+                    line = candidate;
+                }
             }
             lines.Add(line);
         }
         return string.Join("\n", lines);
+    }
+
+    private static float TextWidth(string text, float scale)
+    {
+        return FontAssets.MouseText.Value.MeasureString(text).X * scale;
     }
 
     private enum DetailTab

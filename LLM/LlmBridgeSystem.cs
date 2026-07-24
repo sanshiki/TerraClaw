@@ -141,17 +141,18 @@ public sealed class LlmBridgeSystem : ModSystem
                 symbolicObservation,
                 outputContract);
 
-            JsonNode? result = await _llm.GenerateAsync(
+            JsonNode? rawResult = await _llm.GenerateAsync(
                 prompt.SystemPrompt,
                 prompt.UserPrompt,
                 outputContract,
                 linked.Token);
+            JsonNode? result = output.Normalize(rawResult);
 
             LlmOutputValidationResult validation = output.Validate(result);
             if (!validation.IsValid)
             {
                 string error = "LLM output failed validation: " + validation.ErrorMessage;
-                PublishDebugResult(handle, "failed", stopwatch.Elapsed, result, error);
+                PublishDebugResult(handle, "failed", stopwatch.Elapsed, rawResult, error);
                 FailHandle(handle, error);
                 return;
             }
