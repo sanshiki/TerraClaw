@@ -10,6 +10,7 @@ TerraClaw is a C#-first tModLoader LLM framework. It lets Terraria mod code buil
   render flat symbolic prompt
   call OpenAI/openai-compatible model from C#
   validate structured JSON output
+  optionally query Terraria Wiki through TerraClawKnowledge
   poll LlmRequestHandle
   apply behavior locally
 ```
@@ -107,7 +108,7 @@ See [C# Agent API](docs/CSHARP_AGENT_API.md) and [Framework API](docs/FRAMEWORK_
 
 ### TerraClaw Demo Agent
 
-`Agents/TerraClaw/ExampleTerraClawAgent.cs` is a self-contained `ModNPC` demo. `AgentSpawner` spawns it directly, `/agent ...` sends it one instruction, and its `AI()` method sends non-blocking LLM requests, polls results, and applies local actions such as talking, moving, scanning, and breaking tiles.
+`Agents/TerraClaw/ExampleTerraClawAgent.cs` is a self-contained `ModNPC` demo. `AgentSpawner` spawns it directly, `/agent ...` sends it one instruction, and its `AI()` method sends non-blocking LLM requests, polls results, and applies local actions such as talking, moving, scanning, querying TerraClawKnowledge, and breaking tiles.
 
 ## Configuration
 
@@ -127,6 +128,14 @@ Example:
     "api_base": "",
     "max_tokens": 4096,
     "temperature": 0.3
+  },
+  "knowledge": {
+    "enabled": true,
+    "wiki_api": "https://terraria.wiki.gg/api.php",
+    "default_limit": 3,
+    "extract_chars": 700,
+    "timeout_ms": 20000,
+    "cache_seconds": 300
   }
 }
 ```
@@ -138,6 +147,11 @@ Missing fields fall back to environment variables:
 - `LLM_API_BASE` for OpenAI-compatible endpoints
 - `LLM_MAX_TOKENS`
 - `LLM_TEMPERATURE`
+- `TERRACLAW_KNOWLEDGE_WIKI_API`
+- `TERRACLAW_KNOWLEDGE_LIMIT`
+- `TERRACLAW_KNOWLEDGE_EXTRACT_CHARS`
+- `TERRACLAW_KNOWLEDGE_TIMEOUT_MS`
+- `TERRACLAW_KNOWLEDGE_CACHE_SECONDS`
 
 ## Development Notes
 

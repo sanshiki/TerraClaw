@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using TerraClaw.Events;
 using TerraClaw.Interfaces;
+using TerraClaw.Knowledge;
 using TerraClaw.LLM;
 using TerraClaw.Models;
 using TerraClaw.Registries;
@@ -26,6 +27,7 @@ public sealed class TerraClawApi
         "llm.result.v1",
         "agent.registry.v1",
         "events.v1",
+        "knowledge.query.v1",
     };
 
     private readonly LlmAgentRegistry _agentRegistry = new();
@@ -112,6 +114,34 @@ public sealed class TerraClawApi
             ?? throw new InvalidOperationException("TerraClaw LLM bridge is not loaded.");
 
         return bridge.Request(agentId, systemPrompt, instruction, observation, output, timeoutMs);
+    }
+
+    /// <summary>
+    /// Sends a non-blocking Terraria Wiki knowledge query through the framework service.
+    /// Callers must poll the returned handle from their own tModLoader hooks.
+    /// </summary>
+    public KnowledgeRequestHandle RequestKnowledge(
+        string agentId,
+        string query,
+        int limit = 0,
+        int extractChars = 0,
+        int timeoutMs = 0)
+    {
+        if (string.IsNullOrWhiteSpace(agentId))
+            throw new ArgumentException("Agent id is required.", nameof(agentId));
+        if (string.IsNullOrWhiteSpace(query))
+            throw new ArgumentException("Knowledge query is required.", nameof(query));
+        if (limit < 0)
+            throw new ArgumentOutOfRangeException(nameof(limit), limit, "Limit cannot be negative.");
+        if (extractChars < 0)
+            throw new ArgumentOutOfRangeException(nameof(extractChars), extractChars, "Extract character limit cannot be negative.");
+        if (timeoutMs < 0)
+            throw new ArgumentOutOfRangeException(nameof(timeoutMs), timeoutMs, "Timeout cannot be negative.");
+
+        var knowledge = TerraClawKnowledgeSystem.Instance
+            ?? throw new InvalidOperationException("TerraClaw knowledge system is not loaded.");
+
+        return knowledge.Request(agentId, query, limit, extractChars, timeoutMs);
     }
 
     internal void NotifyLlmRequestStarted(LlmRequestHandle handle)

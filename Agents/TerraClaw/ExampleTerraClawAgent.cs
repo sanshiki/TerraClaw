@@ -10,6 +10,7 @@ using Terraria.GameContent.UI;
 using Terraria.ID;
 using Terraria.ModLoader;
 using TerraClaw.LLM;
+using TerraClaw.Knowledge;
 using TerraClaw.Util;
 
 namespace TerraClaw.Agents.TerraClaw;
@@ -50,7 +51,10 @@ public sealed class ExampleTerraClawAgent : ModNPC
         "- If you need to await player's input, set callback=false so the agent waits for the next instruction turn.\n" +
         "- If you believe the task is complete or unreachable, use plan to clear the goal memory, and inform the player. Remember NOT to use callback=true!\n" +
         "- Use plan to update goal memory/todo list without doing a physical action.\n" +
-        "- Use scanarea when you need a larger tile observation before deciding.";
+        "- Use scanarea when you need a larger tile observation before deciding.\n" +
+        "- Use knowledge_query when you need Terraria Wiki facts about items, NPCs, bosses, recipes, drops, biomes, or progression; do not guess missing game facts.\n" +
+        "- When the know observation is present, use that wiki knowledge to answer or plan the next action.\n" +
+        "- For better search results, the query should be a short keyword-only string, not a full sentence.";
 
     private readonly string _llmAgentId = Guid.NewGuid().ToString();
     private readonly Queue<string> _shortTermMemory = new();
@@ -58,6 +62,7 @@ public sealed class ExampleTerraClawAgent : ModNPC
 
     private LlmRequestHandle? _llm;
     private LlmRequestHandle? _compactLlm;
+    private KnowledgeRequestHandle? _knowledge;
     private PendingAction? _action;
     private int _lastScanTick = -ScanMemoryTicks;
     private int _lastScanRadius = 24;
@@ -65,6 +70,9 @@ public sealed class ExampleTerraClawAgent : ModNPC
     private string _pendingCallbackReason = "";
     private string _lastActionSummary = "none";
     private string _longTermMemory = "";
+    private string _lastKnowledgeQuery = "";
+    private string _lastKnowledgeContext = "";
+    private bool _knowledgeCallback;
     private int _requestSequence;
     private Vector2 _target;
     private Vector2 _lingerOffset;
@@ -105,6 +113,7 @@ public sealed class ExampleTerraClawAgent : ModNPC
     {
         Init();
 
+        PollKnowledge();
         PollCompactLlm();
         PollLlm();
         UpdateAction();
@@ -164,6 +173,8 @@ public sealed class ExampleTerraClawAgent : ModNPC
         if (_llm != null && _llm.IsPending)
             return;
         if (_compactLlm != null && _compactLlm.IsPending)
+            return;
+        if (_knowledge != null && _knowledge.IsPending)
             return;
         if (_action != null)
             return;
@@ -243,7 +254,7 @@ public sealed class ExampleTerraClawAgent : ModNPC
     private LlmObservation BuildObservation(string playerInstruction, string trigger)
     {
         int radius = IsRecentScanAvailable() ? _lastScanRadius : 24;
-        return LlmObservation.Create()
+        var observation = LlmObservation.Create()
             .Use(BuildAgentTileContext())
             .Use(TerrariaContext.Npc(NPC).Life())
             .Use(TerrariaContext.World().Time())
@@ -258,6 +269,18 @@ public sealed class ExampleTerraClawAgent : ModNPC
                 .Field("stm", string.Join(" | ", _shortTermMemory), "short term memory queue")
                 .Field("ltm", _longTermMemory, "long term memory")
                 .Field("scan", IsRecentScanAvailable() ? $"large scan radius {_lastScanRadius}" : "none", "recent scanarea result"));
+
+        if (!string.IsNullOrWhiteSpace(_lastKnowledgeContext))
+            observation.Use(BuildKnowledgeContext());
+
+        return observation;
+    }
+
+    private CustomContextBuilder BuildKnowledgeContext()
+    {
+        return Context.Custom("know", "latest Terraria Wiki query result")
+            .Field("query", _lastKnowledgeQuery, "wiki search query")
+            .Field("results", _lastKnowledgeContext, "compact wiki result summaries with source urls");
     }
 
     private CustomContextBuilder BuildAgentTileContext()
@@ -293,6 +316,11 @@ public sealed class ExampleTerraClawAgent : ModNPC
                     .Number("radius", required: true, defaultValue: 48, description: "scan radius in tiles, clamped to 24..80"),
                 callback_description),
             WithMemoryFields(
+                LlmOutput.Object("knowledge_query", "Query Terraria Wiki for game knowledge before answering or planning using only keywords.")
+                    .String("query", required: true, maxLength: 120, description: "short Terraria Wiki search query with keywords only")
+                    .String("reason", required: true, maxLength: 160, description: "why wiki knowledge is needed"),
+                callback_description),
+            WithMemoryFields(
                 LlmOutput.Object("plan", "Update goal memory / todo list.")
                     .String("todo", required: true, maxLength: 240, description: "replacement todo list or concise plan"),
                 callback_description));
@@ -303,6 +331,32 @@ public sealed class ExampleTerraClawAgent : ModNPC
         return output
             .String("summary", required: true, maxLength: 320, description: "short summary of this request including what you observe, what you do and why")
             .Boolean("callback", required: true, description: callbackDescription);
+    }
+
+    private void PollKnowledge()
+    {
+        if (_knowledge == null)
+            return;
+        if (_knowledge.IsPending)
+            return;
+
+        bool callback = _knowledgeCallback;
+        if (_knowledge.TryGetResult(out KnowledgeQueryResult result))
+        {
+            _lastKnowledgeQuery = result.Query;
+            _lastKnowledgeContext = FormatKnowledgeResult(result);
+            string source = result.FromCache ? "cached wiki" : "wiki";
+            FinishImmediateAction("knowledge_query", $"{source} returned {result.Results.Count} results for '{Truncate(result.Query, 80)}'", callback);
+        }
+        else if (_knowledge.IsDone)
+        {
+            _lastKnowledgeQuery = _knowledge.Query;
+            _lastKnowledgeContext = $"Knowledge query failed for '{_knowledge.Query}': {_knowledge.Error ?? _knowledge.Status.ToString()}";
+            FinishImmediateAction("knowledge_query", _lastKnowledgeContext, callback);
+        }
+
+        _knowledgeCallback = false;
+        _knowledge = null;
     }
 
     private void PollLlm()
@@ -401,6 +455,10 @@ public sealed class ExampleTerraClawAgent : ModNPC
                 StartScanArea(result.Int("radius", 48), callback);
                 break;
 
+            case "knowledge_query":
+                StartKnowledgeQuery(result.String("query"), callback);
+                break;
+
             case "plan":
                 UpdatePlan(result.String("todo"), callback);
                 break;
@@ -457,6 +515,40 @@ public sealed class ExampleTerraClawAgent : ModNPC
         _lastScanTick = (int)Main.GameUpdateCount;
         ShowActionEmote(EmoteID.EmotionAlert);
         FinishImmediateAction("scanarea", $"large scan prepared with radius {_lastScanRadius}", callback);
+    }
+
+    private void StartKnowledgeQuery(string query, bool callback)
+    {
+        query = Truncate(query, 120);
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            FinishImmediateAction("knowledge_query", "empty wiki query", callback);
+            return;
+        }
+
+        _knowledgeCallback = callback;
+        try
+        {
+            var api = global::TerraClaw.TerraClaw.Api;
+            if (api == null || !api.HasFeature("knowledge.query.v1"))
+            {
+                _knowledgeCallback = false;
+                FinishImmediateAction("knowledge_query", "knowledge API unavailable", callback);
+                return;
+            }
+
+            _knowledge = api.RequestKnowledge(_llmAgentId + ":knowledge", query, limit: 3, extractChars: 650, timeoutMs: 20000);
+            _lastActionSummary = $"querying Terraria Wiki: {query}";
+            ShowActionEmote(EmoteID.EmotionAlert);
+        }
+        catch (Exception ex)
+        {
+            _knowledge = null;
+            _knowledgeCallback = false;
+            _lastKnowledgeQuery = query;
+            _lastKnowledgeContext = $"Knowledge query failed for '{query}': {ex.Message}";
+            FinishImmediateAction("knowledge_query", _lastKnowledgeContext, callback);
+        }
     }
 
     private void UpdatePlan(string todo, bool callback)
@@ -732,6 +824,26 @@ public sealed class ExampleTerraClawAgent : ModNPC
     private bool IsRecentScanAvailable()
     {
         return Main.GameUpdateCount - _lastScanTick <= ScanMemoryTicks;
+    }
+
+    private static string Truncate(string value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "";
+        return value.Length <= maxLength ? value : value[..maxLength];
+    }
+    private static string FormatKnowledgeResult(KnowledgeQueryResult result)
+    {
+        if (result.Results.Count == 0)
+            return $"No Terraria Wiki results for '{Truncate(result.Query, 80)}'.";
+
+        return string.Join(" | ", result.Results.Take(3).Select((item, index) =>
+        {
+            string text = !string.IsNullOrWhiteSpace(item.Extract) ? item.Extract : item.Snippet;
+            if (string.IsNullOrWhiteSpace(text))
+                text = "No summary available.";
+            return $"{index + 1}. {item.Title}: {Truncate(text, 520)} Source: {item.Url}";
+        }));
     }
 
     private static IEnumerable<string> SplitMemoryItems(string text)
