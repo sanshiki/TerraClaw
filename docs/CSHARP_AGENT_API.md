@@ -56,6 +56,7 @@ var obs = LlmObservation.Create()
 
 ```csharp
 TerrariaContext.Npc(npc).Basic().Life().Home()
+TerrariaContext.Player(player).Basic().Location().Buffs().Equipment().Inventory()
 TerrariaContext.World().Time().Moon().Progression()
 TerrariaContext.Entities().HostilesNear(npc.Center, 800f, max: 5)
 TerrariaContext.Tiles(npc.Center, radiusTiles: 24).Area(maxSpecials: 12)

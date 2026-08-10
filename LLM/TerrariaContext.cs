@@ -5,12 +5,15 @@ namespace TerraClaw.LLM;
 
 /// <summary>
 /// Entry point for reusable Terraria observation components.
-/// Use these builders before writing custom providers for common NPC, world, entity, and tile data.
+/// Use these builders before writing custom providers for common NPC, player, world, entity, and tile data.
 /// </summary>
 public static class TerrariaContext
 {
     /// <summary>Starts an NPC context bundle for the given Terraria NPC.</summary>
     public static NpcContextBuilder Npc(NPC npc) => new(npc);
+
+    /// <summary>Starts a player context bundle for the given Terraria player.</summary>
+    public static PlayerContextBuilder Player(Player player) => new(player);
 
     /// <summary>Starts a world context bundle.</summary>
     public static WorldContextBuilder World() => new();
