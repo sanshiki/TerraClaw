@@ -47,7 +47,8 @@ bool canRequestLlm = (bool)terraClaw.Call("HasFeature", "llm.requests.v1");
 | `llm.result.v1` | 可使用 `LlmResult` 读取结构化输出 |
 | `agent.registry.v1` | 可注册和查询外部 Agent 元数据 |
 | `events.v1` | 可订阅公开生命周期事件 |
-| `knowledge.query.v1` | 可通过强类型 API 发起非阻塞 Terraria Wiki 查询 |
+| `knowledge.query.v1` | 可通过强类型 API 发起非阻塞的已配置 wiki 知识源查询 |
+| `knowledge.sources.v1` | 可通过强类型 API 枚举 source，并按 source id 限定查询 |
 
 ## Agent 注册
 
@@ -172,7 +173,7 @@ public override void Unload()
 
 ## Knowledge 查询
 
-有编译期引用 TerraClaw 的 Mod 可以用 `TerraClawApi.RequestKnowledge(...)` 查询 Terraria Wiki。该能力不提供弱类型 `Mod.Call` 查询命令；无编译期引用的 Mod 只能通过 `HasFeature("knowledge.query.v1")` 探测能力存在。
+有编译期引用 TerraClaw 的 Mod 可以用 `TerraClawApi.RequestKnowledge(...)` 查询已配置的 Terraria/Mod wiki 知识源。该能力不提供弱类型 `Mod.Call` 查询命令；无编译期引用的 Mod 只能通过 `HasFeature("knowledge.query.v1")` 探测能力存在。
 
 ```csharp
 KnowledgeRequestHandle handle = api.RequestKnowledge(
@@ -180,7 +181,7 @@ KnowledgeRequestHandle handle = api.RequestKnowledge(
     "Night's Edge crafting");
 ```
 
-请求是非阻塞的；保存 handle，并在自己的 `AI()`、`ModSystem` 更新或其他 hook 中轮询 `TryGetResult(out KnowledgeQueryResult result)`。
+请求是非阻塞的；保存 handle，并在自己的 `AI()`、`ModSystem` 更新或其他 hook 中轮询 `TryGetResult(out KnowledgeQueryResult result)`。需要固定知识源时，初始化阶段用 `GetKnowledgeSources()` 或 `HasKnowledgeSource(id)` 检查 source id，然后用 `RequestKnowledgeFromSources(...)` 查询。
 ## Mod.Call 命令表
 
 | 命令 | 参数 | 返回值 |

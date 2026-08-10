@@ -10,7 +10,7 @@ TerraClaw is a C#-first tModLoader LLM framework. It lets Terraria mod code buil
   render flat symbolic prompt
   call OpenAI/openai-compatible model from C#
   validate structured JSON output
-  optionally query Terraria Wiki through TerraClawKnowledge
+  optionally query configured Terraria/Mod wiki sources through TerraClawKnowledge
   poll LlmRequestHandle
   apply behavior locally
 ```
@@ -131,23 +131,59 @@ Example:
   },
   "knowledge": {
     "enabled": true,
-    "wiki_api": "https://terraria.wiki.gg/api.php",
     "default_limit": 3,
     "extract_chars": 700,
     "timeout_ms": 20000,
-    "cache_seconds": 300
+    "cache_seconds": 300,
+    "sources": [
+      {
+        "id": "terraria-en",
+        "api": "https://terraria.wiki.gg/api.php",
+        "page_base": "https://terraria.wiki.gg/wiki/",
+        "language": "en",
+        "priority": 100,
+        "profile": "terraria-en",
+        "transport": "http"
+      },
+      {
+        "id": "terraria-zh",
+        "api": "https://terraria.wiki.gg/zh/api.php",
+        "page_base": "https://terraria.wiki.gg/zh/wiki/",
+        "language": "zh",
+        "priority": 95,
+        "profile": "terraria-zh",
+        "transport": "http"
+      }
+    ]
   }
 }
 ```
 
-Missing fields fall back to environment variables:
+`knowledge.sources` entries are queried in parallel and merged by relevance. Each source needs a stable `id`, a MediaWiki `api`, a `page_base` used for result links, a `language`, a numeric `priority`, a simple extraction `profile`, and an optional `transport` (`http` by default, or `curl` for sources that block .NET HttpClient). Terraria-like wiki.gg and HuijiWiki sources can usually use `terraria-en` or `terraria-zh` profiles; for HuijiWiki sources, use `/w/api.php` and set `page_base` explicitly.
+
+
+HuijiWiki sources may need curl transport:
+
+```json
+{
+  "id": "terraria-calamity-zh",
+  "api": "https://calamity.huijiwiki.com/w/api.php",
+  "page_base": "https://calamity.huijiwiki.com/wiki/",
+  "language": "zh",
+  "priority": 90,
+  "profile": "terraria-zh",
+  "transport": "curl"
+}
+```
+
+Missing fields fall back to environment variables. If `knowledge.sources` is omitted, TerraClaw uses built-in English and Chinese Terraria wiki sources unless `TERRACLAW_KNOWLEDGE_WIKI_API` overrides the legacy single-source endpoint:
 
 - `OPENAI_API_KEY`
 - `LLM_MODEL` (default: `gpt-4o-mini`)
 - `LLM_API_BASE` for OpenAI-compatible endpoints
 - `LLM_MAX_TOKENS`
 - `LLM_TEMPERATURE`
-- `TERRACLAW_KNOWLEDGE_WIKI_API`
+- `TERRACLAW_KNOWLEDGE_WIKI_API` legacy single-source fallback when `knowledge.sources` is omitted
 - `TERRACLAW_KNOWLEDGE_LIMIT`
 - `TERRACLAW_KNOWLEDGE_EXTRACT_CHARS`
 - `TERRACLAW_KNOWLEDGE_TIMEOUT_MS`

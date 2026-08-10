@@ -16,14 +16,24 @@ public enum KnowledgeRequestStatus
     TimedOut,
 }
 
-/// <summary>One Terraria Wiki search result returned by TerraClawKnowledge.</summary>
+/// <summary>One configured wiki search result returned by TerraClawKnowledge.</summary>
 public sealed record KnowledgeSearchResult(
     string Title,
     string Url,
     string Extract,
     string Snippet);
 
-/// <summary>Completed Terraria Wiki query payload.</summary>
+/// <summary>Configured wiki knowledge source exposed to agents and extension mods.</summary>
+public sealed record KnowledgeSourceInfo(
+    string Id,
+    string Api,
+    string PageBase,
+    string Language,
+    int Priority,
+    string Profile,
+    string Transport);
+
+/// <summary>Completed configured wiki query payload.</summary>
 public sealed record KnowledgeQueryResult(
     string Query,
     IReadOnlyList<KnowledgeSearchResult> Results,

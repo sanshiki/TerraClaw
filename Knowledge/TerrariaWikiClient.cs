@@ -4,9 +4,11 @@ using AngleSharp.Dom;
 using AngleSharp.Html.Parser;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -20,25 +22,19 @@ internal sealed class TerrariaWikiClient
 {
     private static readonly HttpClient Http = CreateHttpClient();
     private static int _encodingProvidersRegistered;
-    private static readonly HashSet<string> IntentWords = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "recipe", "recipes", "crafting", "craft", "crafted", "make", "making",
-        "drop", "drops", "dropped", "obtain", "obtained", "get", "getting",
-        "how", "to", "do", "i", "terraria", "wiki", "guide", "for", "of", "the",
-    };
 
     static TerrariaWikiClient()
     {
         EnsureEncodingProvidersRegistered();
     }
 
-    private readonly string _apiEndpoint;
+    private readonly WikiSourceConfig _source;
+    private readonly WikiExtractionProfile _profile;
 
-    public TerrariaWikiClient(string apiEndpoint)
+    public TerrariaWikiClient(WikiSourceConfig source)
     {
-        _apiEndpoint = string.IsNullOrWhiteSpace(apiEndpoint)
-            ? "https://terraria.wiki.gg/api.php"
-            : apiEndpoint.Trim();
+        _source = source;
+        _profile = WikiExtractionProfile.For(source);
     }
 
     public async Task<IReadOnlyList<KnowledgeSearchResult>> QueryAsync(
@@ -48,7 +44,7 @@ internal sealed class TerrariaWikiClient
         CancellationToken cancellationToken)
     {
         IReadOnlyList<SearchHit> searchHits = await SearchAsync(query, limit, cancellationToken);
-        IReadOnlyList<SearchHit> hits = MergeHits(InferTitleCandidates(query), searchHits, limit);
+        IReadOnlyList<SearchHit> hits = MergeHits(InferTitleCandidates(query, _profile), searchHits, limit);
         if (hits.Count == 0)
             return Array.Empty<KnowledgeSearchResult>();
 
@@ -131,13 +127,22 @@ internal sealed class TerrariaWikiClient
         return result.Take(limit).ToList();
     }
 
-    private static IReadOnlyList<string> InferTitleCandidates(string query)
+    private static IReadOnlyList<string> InferTitleCandidates(string query, WikiExtractionProfile profile)
     {
-        string[] words = Regex.Matches(query, @"[A-Za-z0-9']+")
-            .Cast<Match>()
-            .Select(match => match.Value)
-            .Where(word => !IntentWords.Contains(word))
-            .ToArray();
+        string normalizedQuery = CleanQuery(query);
+        if (ContainsCjk(normalizedQuery))
+        {
+            string stripped = normalizedQuery;
+            foreach (string intent in profile.IntentWords.OrderByDescending(word => word.Length))
+                stripped = stripped.Replace(intent, "", StringComparison.OrdinalIgnoreCase).Trim();
+            stripped = Regex.Replace(stripped, @"\s+", " ").Trim();
+            if (!string.IsNullOrWhiteSpace(stripped))
+                return stripped.Equals(normalizedQuery, StringComparison.OrdinalIgnoreCase)
+                    ? new[] { stripped }
+                    : new[] { stripped, normalizedQuery };
+        }
+
+        string[] words = QueryTerms(normalizedQuery, profile).ToArray();
         string candidate = string.Join(" ", words).Trim();
         return string.IsNullOrWhiteSpace(candidate) ? Array.Empty<string>() : new[] { candidate };
     }
@@ -203,10 +208,10 @@ internal sealed class TerrariaWikiClient
         }
     }
 
-    private static string ExtractContext(IDocument document, string query, int maxLength)
+    private string ExtractContext(IDocument document, string query, int maxLength)
     {
         string queryLower = query.ToLowerInvariant();
-        if (ContainsAny(queryLower, "recipe", "recipes", "craft", "crafting", "make"))
+        if (ContainsAny(queryLower, _profile.RecipeIntentWords))
         {
             IReadOnlyList<string> recipes = ExtractRecipeTables(document);
             if (recipes.Count > 0)
@@ -220,35 +225,38 @@ internal sealed class TerrariaWikiClient
         return Truncate(CleanText(document.Body?.TextContent ?? document.TextContent), maxLength);
     }
 
-    private static IReadOnlyList<string> ExtractRecipeTables(IDocument document)
+    private IReadOnlyList<string> ExtractRecipeTables(IDocument document)
     {
         var rows = new List<string>();
-        foreach (IElement table in document.QuerySelectorAll("table.recipes"))
+        foreach (string selector in _profile.RecipeTableSelectors)
         {
-            string[] headers = table.QuerySelectorAll("th")
-                .Select(header => CleanText(header.TextContent).ToLowerInvariant())
-                .ToArray();
-            if (!headers.Any(header => header.Contains("ingredient", StringComparison.OrdinalIgnoreCase)))
-                continue;
-
-            foreach (IElement row in table.QuerySelectorAll("tr"))
+            foreach (IElement table in document.QuerySelectorAll(selector))
             {
-                IElement[] cells = row.Children
-                    .Where(child => string.Equals(child.TagName, "TD", StringComparison.OrdinalIgnoreCase))
+                string[] headers = table.QuerySelectorAll("th")
+                    .Select(header => CleanText(header.TextContent).ToLowerInvariant())
                     .ToArray();
-                if (cells.Length < 2)
+                if (!headers.Any(header => ContainsAny(header, _profile.IngredientHeaderWords)))
                     continue;
 
-                string result = CleanCell(cells[0]);
-                string ingredients = CleanIngredientCell(cells[1]);
-                string station = cells.Length > 2 ? CleanCell(cells[2]) : "";
-                if (string.IsNullOrWhiteSpace(result) || string.IsNullOrWhiteSpace(ingredients))
-                    continue;
+                foreach (IElement row in table.QuerySelectorAll("tr"))
+                {
+                    IElement[] cells = row.Children
+                        .Where(child => string.Equals(child.TagName, "TD", StringComparison.OrdinalIgnoreCase))
+                        .ToArray();
+                    if (cells.Length < 2)
+                        continue;
 
-                var parts = new List<string> { $"Result: {result}", $"Ingredients: {ingredients}" };
-                if (!string.IsNullOrWhiteSpace(station))
-                    parts.Add($"Station: {station}");
-                rows.Add(string.Join("; ", parts));
+                    string result = CleanCell(cells[0]);
+                    string ingredients = CleanIngredientCell(cells[1]);
+                    string station = cells.Length > 2 ? CleanCell(cells[2]) : "";
+                    if (string.IsNullOrWhiteSpace(result) || string.IsNullOrWhiteSpace(ingredients))
+                        continue;
+
+                    var parts = new List<string> { $"Result: {result}", $"Ingredients: {ingredients}" };
+                    if (!string.IsNullOrWhiteSpace(station))
+                        parts.Add($"Station: {station}");
+                    rows.Add(string.Join("; ", parts));
+                }
             }
         }
 
@@ -272,15 +280,15 @@ internal sealed class TerrariaWikiClient
         return Regex.Replace(text, @"\s+", " ").Trim(' ', ',', ';');
     }
 
-    private static IReadOnlyList<IElement> FindRelevantSection(IDocument document, string query)
+    private IReadOnlyList<IElement> FindRelevantSection(IDocument document, string query)
     {
         string queryLower = query.ToLowerInvariant();
         var candidates = new List<string>();
-        if (ContainsAny(queryLower, "drop", "drops", "dropped"))
-            candidates.AddRange(new[] { "drops", "drop rates", "loot" });
-        if (ContainsAny(queryLower, "recipe", "recipes", "craft", "crafting", "make"))
-            candidates.AddRange(new[] { "crafting", "recipes", "used in" });
-        candidates.AddRange(QueryTerms(query));
+        if (ContainsAny(queryLower, _profile.DropIntentWords))
+            candidates.AddRange(_profile.DropSectionWords);
+        if (ContainsAny(queryLower, _profile.RecipeIntentWords))
+            candidates.AddRange(_profile.RecipeSectionWords);
+        candidates.AddRange(QueryTerms(query, _profile));
 
         foreach (IElement heading in document.QuerySelectorAll("h1,h2,h3,h4,h5,h6"))
         {
@@ -309,32 +317,109 @@ internal sealed class TerrariaWikiClient
 
     private async Task<JsonObject> GetJsonAsync(string url, CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        using HttpResponseMessage response = await Http.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
-
-        string text = await response.Content.ReadAsStringAsync(cancellationToken);
+        string text = string.Equals(_source.Transport, "curl", StringComparison.OrdinalIgnoreCase)
+            ? await GetTextWithCurlAsync(url, cancellationToken)
+            : await GetTextWithHttpClientAsync(url, cancellationToken);
         return JsonNode.Parse(text) as JsonObject
             ?? throw new JsonException("MediaWiki API returned non-object JSON.");
     }
 
+    private static async Task<string> GetTextWithHttpClientAsync(string url, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        using HttpResponseMessage response = await Http.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync(cancellationToken);
+    }
+
+    private static async Task<string> GetTextWithCurlAsync(string url, CancellationToken cancellationToken)
+    {
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "curl.exe" : "curl",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            },
+            EnableRaisingEvents = true,
+        };
+
+        process.StartInfo.ArgumentList.Add("-sS");
+        process.StartInfo.ArgumentList.Add("-L");
+        process.StartInfo.ArgumentList.Add("--fail");
+        process.StartInfo.ArgumentList.Add("--max-time");
+        process.StartInfo.ArgumentList.Add("20");
+        process.StartInfo.ArgumentList.Add("-A");
+        process.StartInfo.ArgumentList.Add("TerraClaw/0.1");
+        process.StartInfo.ArgumentList.Add("-H");
+        process.StartInfo.ArgumentList.Add("Accept: application/json,text/plain,*/*");
+        process.StartInfo.ArgumentList.Add(url);
+
+        try
+        {
+            if (!process.Start())
+                throw new InvalidOperationException("Failed to start curl.");
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            throw new InvalidOperationException("curl transport requires curl on PATH.", ex);
+        }
+
+        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        Task<string> stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            KillCurlProcess(process);
+            throw;
+        }
+
+        string stdout = await stdoutTask;
+        string stderr = await stderrTask;
+        if (process.ExitCode != 0)
+            throw new HttpRequestException($"curl exited with code {process.ExitCode}: {stderr.Trim()}");
+        if (string.IsNullOrWhiteSpace(stdout))
+            throw new HttpRequestException("curl returned an empty response.");
+
+        return stdout;
+    }
+
+    private static void KillCurlProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+        }
+    }
+
     private string BuildUrl(IReadOnlyDictionary<string, string> parameters)
     {
-        string separator = _apiEndpoint.Contains('?', StringComparison.Ordinal) ? "&" : "?";
+        string separator = _source.Api.Contains('?', StringComparison.Ordinal) ? "&" : "?";
         string query = string.Join("&", parameters.Select(kvp =>
             $"{Uri.EscapeDataString(kvp.Key)}={Uri.EscapeDataString(kvp.Value)}"));
-        return _apiEndpoint + separator + query;
+        return _source.Api + separator + query;
     }
 
-    private static IEnumerable<string> QueryTerms(string query)
+    private static IEnumerable<string> QueryTerms(string query, WikiExtractionProfile profile)
     {
-        return Regex.Matches(query, @"[A-Za-z0-9']+")
+        return Regex.Matches(query, @"[\u3400-\u9FFF]+|[A-Za-z0-9']+")
             .Cast<Match>()
-            .Select(match => match.Value)
-            .Where(word => !IntentWords.Contains(word));
+            .Select(match => match.Value.Trim())
+            .Where(word => word.Length > 0)
+            .Where(word => !profile.IntentWords.Contains(word));
     }
 
-    private static bool ContainsAny(string text, params string[] words)
+    private static bool ContainsAny(string text, IEnumerable<string> words)
     {
         return words.Any(word => text.Contains(word, StringComparison.OrdinalIgnoreCase));
     }
@@ -351,9 +436,9 @@ internal sealed class TerrariaWikiClient
         return IsHeading(element) ? element.TagName[1] - '0' : 6;
     }
 
-    private static string BuildPageUrl(string title)
+    private string BuildPageUrl(string title)
     {
-        return "https://terraria.wiki.gg/wiki/" + Uri.EscapeDataString(title.Replace(' ', '_'));
+        return _source.PageBase + Uri.EscapeDataString(title.Replace(' ', '_'));
     }
 
     private static IDocument ParseHtml(string html)
@@ -381,6 +466,16 @@ internal sealed class TerrariaWikiClient
             : text;
         string decoded = WebUtility.HtmlDecode(withoutTags);
         return Regex.Replace(decoded, @"\s+", " ").Trim();
+    }
+
+    private static string CleanQuery(string query)
+    {
+        return Regex.Replace(query ?? "", @"\s+", " ").Trim();
+    }
+
+    private static bool ContainsCjk(string text)
+    {
+        return text.Any(ch => ch >= '\u3400' && ch <= '\u9FFF');
     }
 
     private static string Truncate(string text, int maxLength)
@@ -420,6 +515,51 @@ internal sealed class TerrariaWikiClient
     private sealed record SearchHit(string Title, string Snippet);
 
     private sealed record PageSummary(string Title, string Url, string Extract);
+
+    private sealed record WikiExtractionProfile(
+        HashSet<string> IntentWords,
+        string[] RecipeIntentWords,
+        string[] DropIntentWords,
+        string[] RecipeSectionWords,
+        string[] DropSectionWords,
+        string[] IngredientHeaderWords,
+        string[] RecipeTableSelectors)
+    {
+        public static WikiExtractionProfile For(WikiSourceConfig source)
+        {
+            bool zh = source.Language.StartsWith("zh", StringComparison.OrdinalIgnoreCase)
+                || source.Profile.Contains("zh", StringComparison.OrdinalIgnoreCase);
+
+            string[] commonIntent = zh
+                ? new[] { "怎么", "如何", "什么", "wiki", "terraria", "泰拉瑞亚", "灾厄", "模组" }
+                : new[] { "how", "to", "do", "i", "terraria", "wiki", "guide", "for", "of", "the", "mod", "calamity" };
+            string[] recipeIntent = zh
+                ? new[] { "配方", "合成", "制作", "制作表", "recipe", "recipes", "craft", "crafting", "make" }
+                : new[] { "recipe", "recipes", "crafting", "craft", "crafted", "make", "making" };
+            string[] dropIntent = zh
+                ? new[] { "掉落", "掉落物", "掉率", "获取", "获得", "来源", "drop", "drops", "obtain" }
+                : new[] { "drop", "drops", "dropped", "obtain", "obtained", "get", "getting", "loot" };
+            string[] recipeSections = zh
+                ? new[] { "制作", "合成", "配方", "用于", "用于制作", "crafting", "recipes", "used in" }
+                : new[] { "crafting", "recipes", "used in", "recipe" };
+            string[] dropSections = zh
+                ? new[] { "掉落", "掉落物", "掉率", "来源", "获取", "drops", "drop rates", "loot" }
+                : new[] { "drops", "drop rates", "loot", "obtaining" };
+            string[] ingredientHeaders = zh
+                ? new[] { "材料", "素材", "成分", "ingredient", "material" }
+                : new[] { "ingredient", "ingredients", "material", "materials" };
+
+            var intentWords = new HashSet<string>(commonIntent.Concat(recipeIntent).Concat(dropIntent), StringComparer.OrdinalIgnoreCase);
+            return new WikiExtractionProfile(
+                intentWords,
+                recipeIntent,
+                dropIntent,
+                recipeSections,
+                dropSections,
+                ingredientHeaders,
+                new[] { "table.recipes", "table.wikitable.recipes", "table.crafting", "table.wikitable" });
+        }
+    }
 
     private sealed class TerraClawEncodingProvider : EncodingProvider
     {

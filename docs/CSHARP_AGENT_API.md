@@ -112,7 +112,7 @@ var output = LlmOutput.OneOf(
 
 ### Knowledge Queries
 
-Agents can query Terraria Wiki through `TerraClawApi.RequestKnowledge(...)` when they need item, NPC, recipe, drop, biome, or progression facts. This is intentionally a lightweight tool-style API, not a full MCP runtime.
+Agents can query configured Terraria/Mod wiki sources through `TerraClawApi.RequestKnowledge(...)` when they need item, NPC, recipe, drop, biome, or progression facts. This is intentionally a lightweight tool-style API, not a full MCP runtime.
 
 ```csharp
 KnowledgeRequestHandle handle = api.RequestKnowledge(agentId, "Night's Edge crafting");
@@ -122,7 +122,7 @@ if (handle.TryGetResult(out KnowledgeQueryResult result)) {
 }
 ```
 
-Knowledge requests are non-blocking like LLM requests. Do not wait for them inside `AI()` or hooks; keep the handle, poll later, and place the returned summaries into the next `LlmObservation`.
+Knowledge requests are non-blocking like LLM requests. Do not wait for them inside `AI()` or hooks; keep the handle, poll later, and place the returned summaries into the next `LlmObservation`. Use `GetKnowledgeSources()` / `HasKnowledgeSource(id)` during initialization, then `RequestKnowledgeFromSources(...)` when an agent should only use specific source ids.
 
 ## Adding an Agent
 
