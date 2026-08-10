@@ -13,6 +13,8 @@ mod.Call("GetVersion");   // string
 mod.Call("HasFeature", "llm.requests.v1"); // bool
 mod.Call("HasFeature", "llm.validation.v1"); // bool
 mod.Call("HasFeature", "llm.result.v1"); // bool
+mod.Call("HasFeature", "knowledge.query.v1"); // bool
+mod.Call("HasFeature", "knowledge.sources.v1"); // bool
 mod.Call("GetFeatures");  // IReadOnlyCollection<string>
 mod.Call("RegisterAgent", definition); // bool, strongly typed ILlmAgentDefinition
 mod.Call("RegisterAgent", "mymod:agent", "Agent", "Description", "MyMod", "1.0.0", tags); // bool
@@ -57,6 +59,45 @@ LlmRequestHandle handle = api.RequestLlm(
 ```
 
 Completed output is validated against the `LlmOutput` contract before the handle completes. Use `handle.TryGetResult(out LlmResult result)` for safe field reads, or `handle.TryGetResult(out JsonNode? output)` for raw JSON.
+
+## Knowledge Queries
+
+Use `TerraClawApi.RequestKnowledge(...)` for a non-blocking configured wiki query. The runtime fans out across configured MediaWiki APIs and returns a `KnowledgeRequestHandle` that should be polled from normal tModLoader hooks.
+
+```csharp
+KnowledgeRequestHandle handle = api.RequestKnowledge(
+    "mymod:guide_helper",
+    "Night's Edge crafting",
+    limit: 3,
+    extractChars: 700,
+    timeoutMs: 20000);
+
+if (handle.TryGetResult(out KnowledgeQueryResult result)) {
+    foreach (KnowledgeSearchResult item in result.Results) {
+        string title = item.Title;
+        string extract = item.Extract;
+    }
+}
+```
+
+Passing `0` for `limit`, `extractChars`, or `timeoutMs` uses `TerraClawConfig.json` knowledge defaults. Queries run against all enabled `knowledge.sources`, then merge and rank the returned pages.
+
+Agents that want to lock themselves to one wiki source can discover and filter by source id:
+
+```csharp
+IReadOnlyList<KnowledgeSourceInfo> sources = api.GetKnowledgeSources();
+if (api.HasKnowledgeSource("terraria-zh")) {
+    KnowledgeRequestHandle handle = api.RequestKnowledgeFromSources(
+        "mymod:guide_helper",
+        "天顶剑 配方",
+        new[] { "terraria-zh" },
+        limit: 3,
+        extractChars: 700,
+        timeoutMs: 20000);
+}
+```
+
+Weak `Mod.Call` knowledge query commands are intentionally not part of v1.
 
 ## Events
 
