@@ -98,11 +98,13 @@ Use `LlmOutput` to declare structured output options.
 ```csharp
 var output = LlmOutput.OneOf(
     LlmOutput.Object("talk")
-        .String("text", required: true, maxLength: 80),
+        .String("text", "short overhead text", maxLength: 80),
     LlmOutput.Object("set_state")
-        .String("state", required: true, maxLength: 40)
+        .String("state", "state label", maxLength: 40)
 );
 ```
+
+Output fields are required by default. Pass `required: false` only for fields the model may omit.
 
 `LlmOutput` generates:
 

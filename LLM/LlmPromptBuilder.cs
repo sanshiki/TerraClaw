@@ -223,6 +223,9 @@ internal static class LlmPromptBuilder
         string fieldType = ShortType(field["type"]?.GetValue<string>() ?? "any");
         string required = field["required"]?.GetValue<bool>() == true ? "!" : "?";
         var parts = new List<string> { $"{name}:{fieldType}{required}" };
+        string description = field["description"]?.GetValue<string>() ?? "";
+        if (!string.IsNullOrWhiteSpace(description))
+            parts.Add($"desc={JsonSerializer.Serialize(description, CompactJsonOptions)}");
         if (field["max"] is JsonNode max)
             parts.Add($"max={NodeToScalarString(max)}");
         if (field["default"] is JsonNode defaultValue)

@@ -248,7 +248,7 @@ public sealed class ExampleTerraClawAgent : ModNPC
                     .Field("ltm", _longTermMemory, "existing long-term memory")
                     .Field("stm", string.Join(" | ", batch), "short-term summaries to merge")),
             LlmOutput.Object("memory", "Updated long-term memory.")
-                .String("updated_ltm", required: true, maxLength: 1000, description: "complete updated long-term memory string"),
+                .String("updated_ltm", "complete updated long-term memory string", maxLength: 1000),
             timeoutMs: 20000);
         return true;
     }
@@ -300,39 +300,39 @@ public sealed class ExampleTerraClawAgent : ModNPC
         return LlmOutput.OneOf(
             WithMemoryFields(
                 LlmOutput.Object("say", "Say a short in-game message.")
-                    .String("text", required: true, maxLength: 100, description: "message to show above the NPC"),
+                    .String("text", "message to show above the NPC", maxLength: 100),
                 callback_description),
             WithMemoryFields(
                 LlmOutput.Object("moveto", "Move toward a target tile.")
-                    .Number("tile_x", required: true, description: "target tile x")
-                    .Number("tile_y", required: true, description: "target tile y"),
+                    .Number("tile_x", "target tile x")
+                    .Number("tile_y", "target tile y"),
                 callback_description),
             WithMemoryFields(
                 LlmOutput.Object("breaktiles", "Break nearby solid tiles in a small circle.")
-                    .Number("tile_x", required: true, description: "center tile x")
-                    .Number("tile_y", required: true, description: "center tile y")
-                    .Number("radius", required: true, defaultValue: 1, description: "tile radius, clamped to 0..5"),
+                    .Number("tile_x", "center tile x")
+                    .Number("tile_y", "center tile y")
+                    .Number("radius", "tile radius, clamped to 0..5", defaultValue: 1),
                 callback_description),
             WithMemoryFields(
                 LlmOutput.Object("scanarea", "Request a larger tile observation for the next LLM turn.")
-                    .Number("radius", required: true, defaultValue: 48, description: "scan radius in tiles, clamped to 24..80"),
+                    .Number("radius", "scan radius in tiles, clamped to 24..80", defaultValue: 48),
                 callback_description),
             WithMemoryFields(
                 LlmOutput.Object("knowledge_query", "Query configured Terraria/Mod wiki sources for game knowledge before answering or planning using only keywords.")
-                    .String("query", required: true, maxLength: 120, description: "short wiki search query with keywords only")
-                    .String("reason", required: true, maxLength: 160, description: "why wiki knowledge is needed"),
+                    .String("query", "short wiki search query with keywords only", maxLength: 120)
+                    .String("reason", "why wiki knowledge is needed", maxLength: 160),
                 callback_description),
             WithMemoryFields(
                 LlmOutput.Object("plan", "Update goal memory / todo list.")
-                    .String("todo", required: true, maxLength: 240, description: "replacement todo list or concise plan"),
+                    .String("todo", "replacement todo list or concise plan", maxLength: 240),
                 callback_description));
     }
 
     private static LlmObjectBuilder WithMemoryFields(LlmObjectBuilder output, string callbackDescription)
     {
         return output
-            .String("summary", required: true, maxLength: 320, description: "short summary of this request including what you observe, what you do and why")
-            .Boolean("callback", required: true, description: callbackDescription);
+            .String("summary", "short summary of this request including what you observe, what you do and why", maxLength: 320)
+            .Boolean("callback", callbackDescription);
     }
 
     private void PollKnowledge()

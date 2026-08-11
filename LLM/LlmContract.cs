@@ -433,7 +433,7 @@ public sealed class LlmObjectBuilder
     }
 
     /// <summary>Adds a string field to the output object.</summary>
-    public LlmObjectBuilder String(string name, bool required = false, int? maxLength = null, string description = "")
+    public LlmObjectBuilder String(string name, string description = "", bool required = true, int? maxLength = null)
     {
         var schema = new JsonObject { ["type"] = "string" };
         if (maxLength.HasValue)
@@ -443,8 +443,12 @@ public sealed class LlmObjectBuilder
         return Add(name, schema, required, description);
     }
 
+    /// <summary>Adds a string field to the output object using the legacy positional required argument.</summary>
+    public LlmObjectBuilder String(string name, bool isRequired, int? maxLength = null, string description = "")
+        => String(name, description, isRequired, maxLength);
+
     /// <summary>Adds a numeric field to the output object.</summary>
-    public LlmObjectBuilder Number(string name, bool required = false, double? defaultValue = null, string description = "")
+    public LlmObjectBuilder Number(string name, string description = "", bool required = true, double? defaultValue = null)
     {
         var schema = new JsonObject { ["type"] = "number" };
         if (defaultValue.HasValue)
@@ -454,14 +458,22 @@ public sealed class LlmObjectBuilder
         return Add(name, schema, required, description);
     }
 
+    /// <summary>Adds a numeric field to the output object using the legacy positional required argument.</summary>
+    public LlmObjectBuilder Number(string name, bool isRequired, double? defaultValue = null, string description = "")
+        => Number(name, description, isRequired, defaultValue);
+
     /// <summary>Adds a boolean field to the output object.</summary>
-    public LlmObjectBuilder Boolean(string name, bool required = false, string description = "")
+    public LlmObjectBuilder Boolean(string name, string description = "", bool required = true)
     {
         var schema = new JsonObject { ["type"] = "boolean" };
         if (!string.IsNullOrWhiteSpace(description))
             schema["description"] = description;
         return Add(name, schema, required, description);
     }
+
+    /// <summary>Adds a boolean field to the output object.</summary>
+    public LlmObjectBuilder Boolean(string name, bool isRequired, string description = "")
+        => Boolean(name, description, isRequired);
 
     /// <summary>Builds the final output contract branch.</summary>
     public LlmOutput Build() => LlmOutput.FromObject(_name, _description, _properties, _required, _fieldLegend);
@@ -476,15 +488,15 @@ public sealed class LlmObjectBuilder
         var item = new JsonObject
         {
             ["name"] = name,
-            ["type"] = schema["type"]?.GetValue<string>() ?? "any",
-            ["required"] = required,
         };
+        if (!string.IsNullOrWhiteSpace(description))
+            item["description"] = description;
+        item["type"] = schema["type"]?.GetValue<string>() ?? "any";
+        item["required"] = required;
         if (schema["maxLength"] is JsonNode maxLength)
             item["max"] = maxLength.DeepClone();
         if (schema["default"] is JsonNode defaultValue)
             item["default"] = defaultValue.DeepClone();
-        if (!string.IsNullOrWhiteSpace(description))
-            item["description"] = description;
         _fieldLegend.Add(item);
         return this;
     }

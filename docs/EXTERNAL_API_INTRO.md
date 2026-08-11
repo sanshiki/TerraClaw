@@ -112,7 +112,7 @@ LlmRequestHandle handle = api.RequestLlm(
     observation: LlmObservation.Create()
         .Use(TerrariaContext.World().Time()),
     output: LlmOutput.Object("say", "Say one short line.")
-        .String("text", required: true, maxLength: 100),
+        .String("text", "line to show above the NPC", maxLength: 100),
     timeoutMs: 30000);
 ```
 

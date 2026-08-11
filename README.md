@@ -91,10 +91,12 @@ Output contracts are built with `LlmOutput`:
 
 ```csharp
 var output = LlmOutput.OneOf(
-    LlmOutput.Object("talk").String("text", required: true, maxLength: 80),
-    LlmOutput.Object("move_to").Number("x", true).Number("y", true)
+    LlmOutput.Object("talk").String("text", "short overhead text", maxLength: 80),
+    LlmOutput.Object("move_to").Number("x", "target tile x").Number("y", "target tile y")
 );
 ```
+
+Output fields are required by default. Pass `required: false` for optional fields.
 
 `LlmOutput` generates prompt metadata and validates completed model output before the request handle is marked completed. Invalid output fails the request with a dashboard-visible validation error.
 

@@ -55,7 +55,7 @@ LlmRequestHandle handle = api.RequestLlm(
     systemPrompt,
     instruction,
     LlmObservation.Create().Use(TerrariaContext.World().Time()),
-    LlmOutput.Object("say").String("text", required: true, maxLength: 100));
+    LlmOutput.Object("say").String("text", "line to show above the NPC", maxLength: 100));
 ```
 
 Completed output is validated against the `LlmOutput` contract before the handle completes. Use `handle.TryGetResult(out LlmResult result)` for safe field reads, or `handle.TryGetResult(out JsonNode? output)` for raw JSON.

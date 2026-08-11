@@ -178,11 +178,11 @@ public sealed class GuideLlmGlobalNPC : GlobalNPC
         // The parser below accepts both flat typed objects and aggregate forms returned for allOf/anyOf contracts.
         return LlmOutput.AnyOf(
             LlmOutput.Object("combat_text", "Show immediate overhead text above the Guide.")
-                .String("text", required: true, maxLength: 80, description: "short overhead text"),
+                .String("text", "short overhead text", maxLength: 80),
             LlmOutput.Object("cached_text", "Save text for right-click Guide chat.")
-                .String("text", required: true, maxLength: 240, description: "chat text"),
+                .String("text", "chat text", maxLength: 240),
             LlmOutput.Object("set_emotion", "Update the Guide's internal emotion state.")
-                .String("emotion", required: true, maxLength: 40, description: "emotion label")
+                .String("emotion", "emotion label", maxLength: 40)
         );
     }
 
